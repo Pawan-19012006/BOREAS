@@ -1,0 +1,1896 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&display=swap');
+
+:root {
+  --bg-dark: #05070a;
+
+  /* Google-Earth-Pro-style chrome: solid, opaque dark panels -- not glass.
+     Kept the original variable names (--panel-bg/--panel-radius/etc.) from
+     the earlier liquid-glass pass so every component's existing CSS still
+     resolves correctly; only the values changed. */
+  --panel-bg: #202124;
+  --panel-bg-strong: #26272b;
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --panel-border-strong: rgba(255, 255, 255, 0.2);
+  --panel-divider: rgba(255, 255, 255, 0.12);
+  --panel-divider-soft: rgba(255, 255, 255, 0.07);
+  --panel-radius: 8px;
+  --panel-radius-sm: 5px;
+
+  /* Warm-white text -- pairs better with a serif face than pure #fff, and
+     reads closer to a real desktop tool's dark theme than stark white. */
+  --text-main: #f3f1ea;
+  --text-muted: #a8a9a6;
+  --text-dim: #74767a;
+  --accent-cyan: #4fc3f7;
+  --accent-cyan-soft: #38bdf8;
+  --accent-gold: #eab308;
+  --accent-green: #4ade80;
+  --accent-amber: #fbbf24;
+  --accent-red: #f87171;
+  --badge-esa-bg: rgba(0, 51, 102, 0.6);
+  --badge-copernicus-bg: rgba(0, 114, 152, 0.6);
+  --badge-nasa-bg: rgba(179, 0, 0, 0.6);
+  --font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Crisp, no-overshoot easing (Material "emphasized decelerate"-style) --
+     replaces the previous bouncy spring curve; still named --spring-ease
+     so every existing transition declaration resolves unchanged. */
+  --spring-ease: cubic-bezier(0.2, 0, 0, 1);
+  --spring-duration: 220ms;
+  --spring-duration-fast: 140ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  font-family: var(--font-family);
+  overflow: hidden;
+}
+
+/* Real, required Cesium data-provider attribution -- shown (not suppressed,
+   unlike the previous pass) since honest attribution replaces any
+   Google-style branding. Left at Cesium's own default bottom-left position,
+   just restyled small/muted; StatusBar's own bottom-left content starts
+   above it (see .status-bar, bottom offset) so the two don't overlap. */
+.cesium-widget-credits {
+  font-size: 9px !important;
+  color: var(--text-dim) !important;
+  opacity: 0.85;
+  /* Cesium's own default bottom-left position directly overlaps this app's
+     custom status-bar-left column (minimap + brand text) -- shifted right
+     into the gap before the zoom slider instead of overlapping it. */
+  position: fixed !important;
+  left: 165px !important;
+  bottom: 4px !important;
+  right: auto !important;
+  max-width: 300px;
+}
+
+.cesium-widget-credits a {
+  color: var(--text-dim) !important;
+}
+
+/* ============ Chrome panel utility (Google-Earth-Pro-style: solid, opaque,
+   no blur -- kept the .glass-panel class name so every existing component's
+   JSX className still resolves) ============ */
+.glass-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.panel-label {
+  font: 10px var(--font-mono);
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* ============ App shell — full-bleed globe with floating docks ============ */
+.boreas-app-layout {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ============ Globe stage (fills viewport, sits behind every dock) ============ */
+.globe-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #000;
+}
+
+.globe-canvas-wrapper {
+  width: 100%;
+  height: 100%;
+}
+
+.globe-hud-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background-image:
+    linear-gradient(rgba(141, 212, 210, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 212, 210, 0.05) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mix-blend-mode: screen;
+}
+
+.globe-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(2, 6, 10, 0.75) 100%);
+}
+
+/* ============ Status dots ============ */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.status-dot.status-online {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px var(--accent-green);
+  animation: pulseDot 1.8s infinite;
+}
+
+.status-dot.status-checking {
+  background: var(--accent-amber);
+  box-shadow: 0 0 8px var(--accent-amber);
+  animation: pulseDot 1s infinite;
+}
+
+.status-dot.status-offline {
+  background: var(--accent-red);
+  box-shadow: 0 0 8px var(--accent-red);
+}
+
+@keyframes pulseDot {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+/* ============ Top toolbar (Google-Earth-Pro-style single bar: brand, search,
+   icon row, status) — replaces the old hover-expanding left "island" nav and
+   the separate floating voyage search pill. Fixed, opaque, no blur, flat
+   corners; absorbs VoyageSearchBar's origin/destination picker inline. ============ */
+.top-toolbar {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  height: 44px;
+}
+
+.top-toolbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--panel-divider);
+}
+
+.brand-mark {
+  color: var(--accent-cyan-soft);
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.top-toolbar-brand-text {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.top-toolbar-search-wrapper {
+  position: relative;
+  flex: 1;
+  max-width: 440px;
+}
+
+.top-toolbar-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--panel-border);
+  border-radius: 18px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: border-color var(--spring-duration-fast) ease, background var(--spring-duration-fast) ease;
+}
+
+.top-toolbar-search:hover,
+.top-toolbar-search.open {
+  border-color: var(--panel-border-strong);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.voyage-bar-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.voyage-bar-text {
+  flex: 1;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voyage-bar-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(79, 195, 247, 0.25);
+  border-top-color: var(--accent-cyan);
+  animation: voyageSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes voyageSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.voyage-bar-chevron {
+  width: 13px;
+  height: 13px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  transition: transform var(--spring-duration) var(--spring-ease);
+}
+
+.voyage-bar-chevron.open {
+  transform: rotate(180deg);
+}
+
+.voyage-bar-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 420px;
+  max-width: 90vw;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* Rendered unconditionally; hidden/non-interactive until .open so the
+     transition fires on every reveal, not just skipped on mount. */
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+  transform-origin: top left;
+  transition: opacity var(--spring-duration-fast) ease, transform var(--spring-duration) var(--spring-ease);
+}
+
+.voyage-bar-panel.open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.voyage-bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.voyage-bar-row select,
+.voyage-bar-row input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  padding: 7px 8px;
+  font: 12px var(--font-mono);
+}
+
+.voyage-bar-row input::placeholder {
+  color: var(--text-dim);
+}
+
+.nav-path-note {
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.top-toolbar-icons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.nav-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: var(--panel-radius-sm);
+  cursor: pointer;
+  transition: background var(--spring-duration-fast) ease, color var(--spring-duration-fast) ease;
+}
+
+.nav-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nav-btn.active {
+  color: var(--accent-cyan-soft);
+  background: rgba(79, 195, 247, 0.14);
+}
+
+.nav-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.nav-label {
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.top-toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--panel-divider);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ============ Route results panel (right side, Google-Maps directions
+   sidebar) -- appears once a voyage is planned from the top search bar,
+   independent of whether that search bar's own dropdown is open. ============ */
+.route-results-panel {
+  position: fixed;
+  top: 70px;
+  right: 20px;
+  width: 380px;
+  max-width: 90vw;
+  max-height: 62vh;
+  z-index: 150;
+  overflow-y: auto;
+  padding: 0;
+  transform: translateX(24px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--spring-duration-fast) ease, transform var(--spring-duration) var(--spring-ease);
+}
+
+.route-results-panel.open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.route-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  position: sticky;
+  top: 0;
+  background: var(--panel-bg-strong);
+}
+
+.route-results-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+/* ============ Flyout panel (one panel, content switched by activeTab) ============ */
+/* Rendered unconditionally with an .open class toggle rather than
+   conditionally mounted -- CSS transitions don't play on first mount, so
+   toggling a class on an already-mounted node is what makes this fire
+   reliably every time. */
+.flyout-panel {
+  position: fixed;
+  left: 12px;
+  top: 70px;
+  width: 360px;
+  max-height: calc(100vh - 100px);
+  padding: 0;
+  z-index: 150;
+  overflow-y: auto;
+  transform: translateY(-8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--spring-duration-fast) ease, transform var(--spring-duration) var(--spring-ease);
+}
+
+.flyout-panel.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.flyout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  position: sticky;
+  top: 0;
+  background: var(--panel-bg-strong);
+}
+
+.flyout-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-main);
+}
+
+.panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+/* ============ Layer toggle list (rendered inside FlyoutPanel) ============ */
+.layer-toggle-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.layer-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  border-bottom: 1px solid var(--panel-divider-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.layer-toggle-row:last-child {
+  border-bottom: none;
+}
+
+.layer-toggle-row input {
+  display: none;
+}
+
+.layer-toggle-check {
+  width: 13px;
+  height: 13px;
+  border: 1px solid #6c9499;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.layer-toggle-row input:checked + .layer-toggle-check {
+  background: var(--accent-cyan-soft);
+  border-color: var(--accent-cyan-soft);
+  box-shadow: inset 0 0 0 3px rgba(9, 19, 28, 0.9);
+}
+
+.layer-toggle-icon {
+  width: 16px;
+  font: 14px var(--font-mono);
+  text-align: center;
+}
+
+.layer-icon-iceberg { color: #8ce8ff; }
+.layer-icon-ice { color: #70d1b1; }
+.layer-icon-risk { color: var(--accent-amber); }
+.layer-icon-route { color: var(--accent-gold); }
+.layer-icon-forecast { color: var(--accent-cyan); }
+
+.layer-toggle-name {
+  color: var(--text-main);
+}
+
+/* ============ Inspector dock (floating card, click-to-open) ============ */
+/* Independent of FlyoutPanel: triggered by clicking the globe, not the
+   island, so both can be open at once. Same unconditional-node + .open
+   class-toggle animation pattern as .flyout-panel. */
+.inspector-dock {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 280px;
+  padding: 16px;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transform: translateX(12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--spring-duration-fast) ease, transform var(--spring-duration) var(--spring-ease);
+}
+
+.inspector-dock.open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inspector-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.inspector-close:hover {
+  color: var(--text-main);
+}
+
+.inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.object-badge {
+  display: inline-block;
+  align-self: flex-start;
+  font: 9px var(--font-mono);
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.object-badge.risk-low { color: var(--accent-green); border-color: var(--accent-green); background: rgba(74, 222, 128, 0.1); }
+.object-badge.risk-guarded { color: var(--accent-amber); border-color: var(--accent-amber); background: rgba(245, 206, 105, 0.1); }
+.object-badge.risk-high { color: var(--accent-red); border-color: var(--accent-red); background: rgba(248, 113, 113, 0.1); }
+.object-badge.vessel-badge { color: var(--accent-gold); border-color: var(--accent-gold); background: rgba(245, 206, 105, 0.1); }
+
+.inspector-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.inspector-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+
+.inspector-field label {
+  font: 9px var(--font-mono);
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.inspector-field span {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.confidence-bar-track {
+  position: relative;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.confidence-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.confidence-bar-fill.tone-high { background: rgba(74, 222, 128, 0.35); }
+.confidence-bar-fill.tone-mid { background: rgba(245, 206, 105, 0.35); }
+.confidence-bar-fill.tone-low { background: rgba(248, 113, 113, 0.35); }
+
+.confidence-bar-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 9px var(--font-mono);
+  letter-spacing: 0.06em;
+  color: var(--text-main);
+}
+
+.inspector-rationale {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.inspector-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--panel-divider-soft);
+}
+
+.inspector-footer-text {
+  font: 9px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.reading-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--panel-divider-soft);
+}
+
+.reading-row label {
+  font: 9px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.reading-row strong {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.reading-sub {
+  font: 9px var(--font-mono);
+  color: var(--text-dim);
+}
+
+.placeholder-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* ============ Bottom tile strip (hidden by default — replaces the old
+   always-visible dock). Revealed by hovering the thin hot-edge strip at
+   the very bottom of the screen, or by toggling "Satellite Data" in the
+   island menu (.open class, persists regardless of hover). The hot-edge
+   is deliberately thin (16px) rather than spanning the whole dock's area
+   so it doesn't block globe drag/pinch except in that thin sliver. ============ */
+.tile-strip-hover-edge {
+  position: fixed;
+  left: 12px;
+  right: 20px;
+  bottom: 0;
+  height: 16px;
+  z-index: 149;
+}
+
+.tile-strip-dock {
+  position: fixed;
+  left: 12px;
+  right: 20px;
+  bottom: 16px;
+  max-height: 210px;
+  padding: 12px 16px;
+  z-index: 150;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(28px);
+  pointer-events: none;
+  transition: opacity var(--spring-duration) var(--spring-ease), transform var(--spring-duration) var(--spring-ease);
+}
+
+.tile-strip-hover-edge:hover + .tile-strip-dock,
+.tile-strip-dock:hover,
+.tile-strip-dock.open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.tile-strip-dock .live-panel-header {
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  background: transparent;
+  border: none;
+}
+
+.tile-strip-dock .panel-title-group h3 {
+  font-size: 11px;
+}
+
+.tile-strip-dock .panel-subtitle {
+  display: none;
+}
+
+.tile-strip-dock .card-image-wrapper {
+  height: 70px;
+}
+
+.tile-strip-dock .live-satellite-card {
+  padding: 10px;
+  gap: 6px;
+}
+
+.tile-strip-dock .card-footer-controls {
+  display: none;
+}
+
+/* ============ Navigation panel (turn-by-turn directions) ============ */
+.nav-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.nav-picker-row select,
+.nav-picker-row input[type='range'] {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  padding: 5px 8px;
+  font: 11px var(--font-mono);
+}
+
+.nav-checkpoint-desc {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.nav-plan-btn {
+  background: var(--accent-cyan);
+  color: #04121a;
+  border: none;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.nav-plan-btn:hover:not(:disabled) {
+  background: var(--accent-cyan-soft);
+}
+
+.nav-plan-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.nav-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--accent-red);
+}
+
+.nav-directions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--panel-divider);
+}
+
+.nav-summary-row {
+  display: flex;
+  justify-content: space-between;
+  font: 13px var(--font-mono);
+  color: var(--accent-cyan-soft);
+  font-weight: 700;
+}
+
+.nav-legs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-leg-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-main);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--panel-divider-soft);
+}
+
+.nav-leg-item:last-child {
+  border-bottom: none;
+}
+
+.nav-leg-arrow {
+  display: inline-block;
+  color: var(--accent-cyan);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.nav-leg-text {
+  flex: 1;
+}
+
+.nav-vessel-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 0;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.vessel-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vessel-status-live {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+
+.vessel-status-range {
+  background: #fbbf24;
+}
+
+.vessel-status-none {
+  background: #94a3b8;
+}
+
+.nav-warning {
+  margin: 0;
+  font-size: 10.5px;
+  color: #fbbf24;
+  line-height: 1.4;
+}
+
+.nav-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nav-option-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.nav-option-card:hover {
+  border-color: var(--panel-border-strong);
+}
+
+.nav-option-card.selected {
+  border-color: var(--accent-cyan);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.nav-option-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nav-option-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.nav-option-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #04121a;
+  background: var(--accent-cyan);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.nav-option-stats {
+  display: flex;
+  gap: 12px;
+  font: 11px var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* ============ Forecast panel (ensemble heatmap legend) ============ */
+.heatmap-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.heatmap-legend-swatch {
+  height: 10px;
+  border-radius: 4px;
+  background: linear-gradient(to right, #0a2830, #22d3ee);
+}
+
+.heatmap-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font: 9px var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* ============ Edge AI panel ============ */
+.edge-config-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.edge-config-card h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-cyan-soft);
+}
+
+/* ============ Fusion panel ============ */
+.fusion-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fusion-bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fusion-bar-row label {
+  font: 9px var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.fusion-bar-fused label {
+  color: var(--accent-cyan-soft);
+}
+
+/* ============ Agency Badges ============ */
+.agency-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.agency-esa {
+  background: var(--badge-esa-bg);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.3);
+}
+
+.agency-copernicus {
+  background: var(--badge-copernicus-bg);
+  color: #67e8f9;
+  border: 1px solid rgba(103, 232, 249, 0.3);
+}
+
+.agency-nasa {
+  background: var(--badge-nasa-bg);
+  color: #fca5a5;
+  border: 1px solid rgba(252, 165, 165, 0.3);
+}
+
+/* ============ Satellite panel content (rendered inside satellite-overlay-dock) ============ */
+.satellite-feature-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.live-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 14px 20px;
+}
+
+.panel-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.panel-title-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--accent-cyan);
+}
+
+.panel-title-group h3 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.panel-subtitle {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.date-picker-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.date-picker-control input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  color: var(--text-main);
+  padding: 6px 12px;
+  border-radius: 6px;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.date-picker-control input:focus {
+  border-color: var(--accent-cyan);
+}
+
+.satellite-tiles-4row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  width: 100%;
+}
+
+@media (max-width: 1200px) {
+  .satellite-tiles-4row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.live-satellite-card {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius-sm);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all var(--spring-duration-fast) ease;
+}
+
+.live-satellite-card:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.card-top-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.card-title-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.card-subtitle-type {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.maximize-btn-icon {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  color: var(--text-main);
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.maximize-btn-icon:hover {
+  background: var(--accent-cyan);
+  color: #000;
+  border-color: var(--accent-cyan);
+}
+
+.maximize-btn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.card-image-wrapper {
+  position: relative;
+  width: 100%;
+  height: 180px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #000;
+}
+
+.card-realtime-satellite-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Honest empty-state -- a real designed placeholder card (illustrated
+   glyph on a textured dark surface), never a static photo standing in for
+   live data. Opaque, no blur, matching the rest of the toolbar-style
+   chrome rather than the old glass treatment. */
+.not-connected-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 12px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(79, 195, 247, 0.08), transparent 60%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 14px),
+    #16171a;
+  border-radius: var(--panel-radius-sm);
+}
+
+.not-connected-icon {
+  width: 38px;
+  height: 38px;
+  color: #6b6f76;
+}
+
+.not-connected-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #cbd5e1;
+}
+
+.not-connected-reason {
+  font-size: 9.5px;
+  color: #94a3b8;
+  line-height: 1.4;
+  max-width: 220px;
+}
+
+.status-not-connected {
+  color: var(--text-dim) !important;
+}
+
+.image-live-indicator {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #4ade80;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.5px;
+}
+
+.live-pulsing-dot {
+  width: 6px;
+  height: 6px;
+  background-color: #22c55e;
+  border-radius: 50%;
+  box-shadow: 0 0 6px #22c55e;
+  animation: pulseDot 1.5s infinite;
+}
+
+.image-scale-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: #f1f5f9;
+}
+
+.image-date-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: #f1f5f9;
+}
+
+.copernicus-legend-overlay {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 120px;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.legend-bar-gradient {
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #030712 0%, #0284c7 50%, #38bdf8 100%);
+}
+
+.legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: #cbd5e1;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+}
+
+.card-footer-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.card-action-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.card-action-btn.primary {
+  background: rgba(34, 211, 238, 0.12);
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  color: var(--accent-cyan);
+}
+
+.card-action-btn.primary:hover {
+  background: var(--accent-cyan);
+  color: #000;
+}
+
+.card-action-btn.secondary {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-main);
+}
+
+.card-action-btn.secondary:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.card-action-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ============ Maximized Tile Modal ============ */
+.tile-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(12px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.tile-modal-content {
+  width: 92vw;
+  max-width: 1280px;
+  height: 88vh;
+  background: var(--panel-bg-strong);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.7);
+}
+
+.modal-header {
+  height: 56px;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-bg-strong);
+}
+
+.modal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.modal-header-left h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+.modal-datatype {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.modal-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sync-globe-btn {
+  background: var(--accent-cyan);
+  color: #000;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sync-globe-btn:hover {
+  background: #67e8f9;
+}
+
+.close-modal-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+.close-modal-btn:hover {
+  color: var(--text-main);
+}
+
+.modal-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.modal-viewport-container {
+  flex: 1;
+  position: relative;
+  background: #000;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-not-connected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(79, 195, 247, 0.08), transparent 60%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 14px),
+    #16171a;
+  border-radius: var(--panel-radius);
+  padding: 32px 40px;
+}
+
+.modal-not-connected .not-connected-icon {
+  width: 56px;
+  height: 56px;
+}
+
+.modal-not-connected .not-connected-label {
+  font-size: 14px;
+}
+
+.modal-not-connected .not-connected-reason {
+  max-width: 320px;
+  font-size: 11px;
+}
+
+.viewport-zoom-layer {
+  transition: transform 0.2s ease;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-hd-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.modal-live-badge {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #4ade80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-scale-indicator {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.modal-copernicus-legend {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 10px 14px;
+  border-radius: 8px;
+  width: 220px;
+}
+
+.modal-legend-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.modal-zoom-controls {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.modal-zoom-controls button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-main);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.modal-zoom-controls button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.modal-sidebar-info {
+  width: 320px;
+  background: rgba(10, 18, 28, 0.95);
+  border-left: 1px solid var(--panel-border);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.info-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-block label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.modal-date-picker {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  color: var(--text-main);
+  padding: 8px 12px;
+  border-radius: 6px;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.info-block h4 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.spec-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.spec-item {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.spec-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.spec-val {
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.modal-description-text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.bounds-badge {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: rgba(34, 211, 238, 0.1);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+/* ============ Scrollbars (thin, dark-on-glass to stay visible against the
+   light panel material) ============ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+/* ============ Globe controls (bottom-right: 2D/3D, compass, zoom rocker) —
+   every control here calls a real Cesium camera/scene API. ============ */
+.globe-controls {
+  position: fixed;
+  right: 20px;
+  bottom: 56px;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.globe-control-btn {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text-main);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--spring-duration-fast) ease, border-color var(--spring-duration-fast) ease;
+}
+
+.globe-control-btn:hover {
+  background: var(--panel-bg-strong);
+  border-color: var(--panel-border-strong);
+}
+
+.scene-mode-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  font: 700 11px var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.compass-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.compass-needle {
+  width: 22px;
+  height: 22px;
+  color: var(--text-main);
+  transition: transform 0.15s linear;
+}
+
+.globe-zoom-rocker {
+  display: flex;
+  flex-direction: column;
+  border-radius: 17px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+}
+
+.globe-zoom-rocker .globe-control-btn {
+  width: 34px;
+  height: 30px;
+  border: none;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 0;
+}
+
+.globe-zoom-divider {
+  height: 1px;
+  background: var(--panel-divider);
+}
+
+/* ============ Status bar (bottom strip: attribution+minimap, zoom slider,
+   live camera readout) ============ */
+.status-bar {
+  position: fixed;
+  left: 12px;
+  right: 90px;
+  bottom: 12px;
+  z-index: 150;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  pointer-events: none;
+}
+
+.status-bar-left,
+.status-bar-center,
+.status-bar-right {
+  pointer-events: auto;
+}
+
+.status-bar-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.minimap-canvas {
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  display: block;
+}
+
+.status-bar-brand {
+  font: 9px var(--font-mono);
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.status-bar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius-sm);
+  padding: 6px 12px;
+}
+
+.zoom-slider {
+  width: 160px;
+  accent-color: var(--accent-cyan);
+}
+
+.zoom-slider-label {
+  font: 10px var(--font-mono);
+  color: var(--text-muted);
+  min-width: 52px;
+  text-align: right;
+}
+
+.status-bar-right {
+  font: 10px var(--font-mono);
+  color: var(--text-muted);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius-sm);
+  padding: 6px 12px;
+  white-space: nowrap;
+}

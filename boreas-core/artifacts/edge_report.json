@@ -1,0 +1,34 @@
+{
+  "tiny": {
+    "teacher_vs_truth_mse": 0.07124499976634979,
+    "student_vs_truth_mse": 0.05351613834500313,
+    "student_vs_teacher_mse": 0.01765255257487297,
+    "teacher_param_count": 11000000,
+    "student_param_count": 6026,
+    "compression_ratio": 1825.4231662794557,
+    "fp32_path": "/home/haroon/Desktop/boreas/boreas-core/artifacts/edge_tiny/student_fp32.onnx",
+    "int8_path": "/home/haroon/Desktop/boreas/boreas-core/artifacts/edge_tiny/student_int8.onnx",
+    "fp32_size_kb": 24.76171875,
+    "int8_size_kb": 9.8681640625,
+    "size_reduction_pct": 60.14749960561603,
+    "fp32_latency_ms": 0.3003281199198682,
+    "int8_latency_ms": 1.6278379999857862,
+    "max_abs_output_diff": 0.024497270584106445
+  },
+  "edge_target": {
+    "teacher_vs_truth_mse": 0.07124499976634979,
+    "student_vs_truth_mse": 0.052172157913446426,
+    "student_vs_teacher_mse": 0.013851247727870941,
+    "teacher_param_count": 11000000,
+    "student_param_count": 169538,
+    "compression_ratio": 64.88220929821043,
+    "fp32_path": "/home/haroon/Desktop/boreas/boreas-core/artifacts/edge_target/student_fp32.onnx",
+    "int8_path": "/home/haroon/Desktop/boreas/boreas-core/artifacts/edge_target/student_int8.onnx",
+    "fp32_size_kb": 662.3818359375,
+    "int8_size_kb": 171.033203125,
+    "size_reduction_pct": 74.17906200840658,
+    "fp32_latency_ms": 3.9620644800015725,
+    "int8_latency_ms": 13.60580011998536,
+    "max_abs_output_diff": 0.023422598838806152
+  }
+}

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# Trained artifacts and exported model files -- reproducible via the
+# documented scripts/commands in README.md, not meant to be committed.
+artifacts/*.onnx
+artifacts/*.onnx.data
+artifacts/*.zip
+artifacts/*.npz
+artifacts/edge_tiny/
+artifacts/edge_target/

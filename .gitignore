@@ -1,0 +1,56 @@
+# ============ Secrets -- never commit real credentials ============
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ============ External / non-BOREAS repos and local scratch data ============
+# icenet-mp is a separate, third-party, MIT-licensed research repo
+# (github.com/alan-turing-institute/icenet-mp) with its own git history --
+# it is a prerequisite you clone independently (see README.md), not part of
+# this repo. cesium-globe/ is an earlier standalone prototype that predates
+# frontend/ and isn't wired into the current app. base/ is local training
+# run output (report images, checkpoints, intermediate data) -- large,
+# regenerable, and not meant to be version-controlled.
+/icenet-mp/
+/cesium-globe/
+/base/
+
+# Session build notes / scratch docs generated during development.
+boreas-build-summary-*.md
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# ============ Node / frontend ============
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============ Trained model artifacts (reproducible via documented scripts,
+# not meant to be committed -- see boreas-core/README.md) ============
+boreas-core/artifacts/*.onnx
+boreas-core/artifacts/*.onnx.data
+boreas-core/artifacts/*.zip
+boreas-core/artifacts/*.npz
+boreas-core/artifacts/edge_tiny/
+boreas-core/artifacts/edge_target/
+
+# ============ Editor / OS ============
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.swp
