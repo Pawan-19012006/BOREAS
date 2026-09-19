@@ -47,20 +47,21 @@ This document provides a comprehensive technical audit of the satellite Earth Ob
   - Fixed to the **Prydz Bay / Larsemann Hills** sector encompassing India's Bharati Station:
     $$\text{BBOX} = [74.0^\circ\text{E}, -70.5^\circ\text{S}, 78.5^\circ\text{E}, -68.3^\circ\text{S}]$$
   - Matches the bounding box of `frontend/src/layers/sentinel-1/index.ts` and `sentinel-2/index.ts`.
-- **Time Windowing**:
+- **Time Windowing & Scene Selection**:
   - Rollback window: `LOOKBACK_DAYS = 14`.
-  - Filter: `mosaickingOrder: "mostRecent"`. This accommodates Sentinel-1's ~6–12 day repeat cycle and Sentinel-2's ~5-day polar pass cycle, ensuring a recent acquisition is returned rather than failing on cloud cover or non-pass days.
+  - **Sentinel-1**: Queries CDSE STAC (`sentinel-1-grd`) to discover the most recent scene and resolve dynamic polarization (e.g. `DH` with `HH/HV` for Antarctic EW passes vs `DV` with `VV/VH`).
+  - **Sentinel-2**: Sentinel-2 now uses STAC (`sentinel-2-l2a`) for scene discovery and cloud-aware scene selection, while Sentinel Hub Processing API remains responsible for rendering. It queries candidate acquisitions within the 14-day window, filters by cloud cover threshold (`max_cloud_cover = 50.0%`), selects the lowest-cloud acquisition, and narrows the Processing API `timeRange` to the selected scene timestamp with `leastCC` mosaicking order.
 - **Evalscript Processing**:
-  - **Sentinel-1 (`S1GRD`)**: Evaluates `VV` and `VH` dual-polarization channels:
+  - **Sentinel-1 (`S1GRD`)**: Evaluates matching polarization channels (dynamic `HH/HV` or `VV/VH`):
     ```javascript
     //VERSION=3
     function setup() {
-      return { input: ["VV", "VH"], output: { bands: 3 } };
+      return { input: ["HH", "HV"], output: { bands: 3 } };
     }
     function evaluatePixel(sample) {
-      let vv = Math.min(1, sample.VV * 8);
-      let vh = Math.min(1, sample.VH * 12);
-      return [vv, (vv + vh) / 2, vh];
+      let hh = Math.min(1, sample.HH * 8);
+      let hv = Math.min(1, sample.HV * 12);
+      return [hh, (hh + hv) / 2, hv];
     }
     ```
     Produces high-contrast radar imagery highlighting ice floe edges and leads.
@@ -91,6 +92,7 @@ This document provides a comprehensive technical audit of the satellite Earth Ob
   - `status.py` returns `connected: false` when credentials are absent.
   - The frontend `useSatelliteStatus` hook displays "NOT CONNECTED" with actionable hints.
   - Quicklook endpoints return HTTP `503` with structured debug JSON rather than serving a deceptive fallback image.
+  - Quicklook endpoints return `X-Sentinel-*` response headers detailing the discovered scene ID, acquisition datetime, cloud cover percentage (for Sentinel-2), and polarization/bands (for Sentinel-1).
 
 ---
 
@@ -121,7 +123,7 @@ When the operator clicks **"View on 3D Globe"** (`handleSyncToGlobe` in `Satelli
 
 1. **Fixed Geographic Bounding Box**: Quicklook generation currently targets a hardcoded bounding box around Bharati Station (`[74.0, -70.5, 78.5, -68.3]`). Imagery cannot currently be requested dynamically for arbitrary waypoints along a voyage.
 2. **Coarse AMSR2 Grid Size**: The Copernicus Marine imagery provider uses an estimated tile size of $350 \times 120$ pixels in `copernicus-marine/index.ts`.
-3. **No Cloud Masking Filter for Optical**: Sentinel-2 requests use `mostRecent` mosaicking without a dynamic maximum cloud-cover threshold. Overcast passes may produce white cloud scenes rather than sea ice.
+3. **Cloud Threshold Fallback**: When persistent overcast weather covers the entire AOI across all 14 days, Sentinel-2 falls back to the lowest-cloud acquisition in the catalog, exposing the actual cloud percentage in headers and logs.
 4. **Single-Scene Quicklook vs WMTS Tiling**: Imagery is served as a single static tile overlay rather than a multi-resolution slippy map tile pyramid (TMS/WMTS).
 
 ---

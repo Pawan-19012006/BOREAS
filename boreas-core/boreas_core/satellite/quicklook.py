@@ -21,6 +21,7 @@ class Quicklook:
     content_type: str
     reason: str
     debug: dict | None = None
+    metadata: dict | None = None
 
 
 # source_id -> (cached_at_monotonic, Quicklook)
@@ -47,7 +48,12 @@ def _fetch(source_id: str) -> Quicklook:
     if source_id in ("sentinel-1", "sentinel-2"):
         raw = sentinel_hub.fetch_sentinel_quicklook(source_id)
         return Quicklook(
-            available=raw.available, image_bytes=raw.image_bytes, content_type=raw.content_type, reason=raw.reason, debug=raw.debug
+            available=raw.available,
+            image_bytes=raw.image_bytes,
+            content_type=raw.content_type,
+            reason=raw.reason,
+            debug=raw.debug,
+            metadata=raw.metadata,
         )
 
     if source_id == "copernicus-marine":

@@ -35,21 +35,54 @@ def test_successful_fetch_returns_image_bytes(monkeypatch):
     monkeypatch.setenv(cdse_auth.CDSE_CLIENT_ID_ENV, "id")
     monkeypatch.setenv(cdse_auth.CDSE_CLIENT_SECRET_ENV, "secret")
 
-    def _post(url, **kwargs):
+    monkeypatch.setattr(
+        sentinel_hub.stac,
+        "discover_best_sentinel2_scene",
+        lambda *a, **k: sentinel_hub.stac.Sentinel2Scene(
+            item_id="S2_TEST_ITEM",
+            datetime="2026-09-10T03:36:00Z",
+            cloud_cover=12.0,
+            bbox=[74.0, -70.5, 78.5, -68.3],
+            geometry={},
+            tile_id="T43DED",
+        ),
+    )
+
+    captured_payload = {}
+
+    def _post(url, json=None, headers=None, **kwargs):
+        nonlocal captured_payload
         if "identity.dataspace" in url:
             return _FakeResponse(200, content=b"")
+        captured_payload = json
         return _FakeResponse(200, content=b"\x89PNGfakebytes")
 
     def _fake_token(*a, **k):
         return "tok123"
 
     monkeypatch.setattr(sentinel_hub, "get_cdse_token", _fake_token)
-    monkeypatch.setattr(sentinel_hub.httpx, "post", lambda *a, **k: _FakeResponse(200, content=b"\x89PNGfakebytes"))
+    monkeypatch.setattr(sentinel_hub.httpx, "post", _post)
 
     result = sentinel_hub.fetch_sentinel_quicklook("sentinel-2")
     assert result.available is True
     assert result.image_bytes == b"\x89PNGfakebytes"
     assert result.content_type == "image/png"
+    assert result.metadata is not None
+    assert result.metadata["scene_id"] == "S2_TEST_ITEM"
+    assert result.metadata["cloud_cover"] == 12.0
+
+    # Verify timeRange is narrowed around the scene datetime
+    time_filter = captured_payload["input"]["data"][0]["dataFilter"]["timeRange"]
+    assert "2026-09-09" in time_filter["from"] or "2026-09-10" in time_filter["from"]
+    assert "2026-09-10" in time_filter["to"]
+
+    # Verify true-color RGBA evalscript with dataMask
+    evalscript = captured_payload["evalscript"]
+    assert "dataMask" in evalscript
+    assert "sample.B04" in evalscript
+    assert "bands: 4" in evalscript
+    assert result.metadata["bbox"] == [74.0, -70.5, 78.5, -68.3]
+    assert captured_payload["input"]["bounds"]["bbox"] == [74.0, -70.5, 78.5, -68.3]
 
 
 def test_non_200_response_is_unavailable(monkeypatch):

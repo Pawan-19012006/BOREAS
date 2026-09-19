@@ -36,13 +36,12 @@ BBOX = (74.0, -70.5, 78.5, -68.3)
 LOOKBACK_DAYS = 14
 OUTPUT_SIZE = 512
 
-_SENTINEL_2_EVALSCRIPT = """
-//VERSION=3
+_SENTINEL_2_EVALSCRIPT = """//VERSION=3
 function setup() {
-  return { input: ["B04", "B03", "B02"], output: { bands: 3 } };
+  return { input: ["B04", "B03", "B02", "dataMask"], output: { bands: 4 } };
 }
 function evaluatePixel(sample) {
-  return [2.5 * sample.B04, 2.5 * sample.B03, 2.5 * sample.B02];
+  return [2.5 * sample.B04, 2.5 * sample.B03, 2.5 * sample.B02, sample.dataMask * 255];
 }
 """
 
@@ -64,6 +63,7 @@ class QuicklookResult:
     # tell "bad credentials" from "no scene in range" from "auth scope
     # issue" instead of only a flattened message. None on success.
     debug: dict | None = None
+    metadata: dict | None = None
 
 
 def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, timeout_s: float = 45.0) -> QuicklookResult:
@@ -77,16 +77,26 @@ def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, 
     try:
         token = get_cdse_token()
     except CdseAuthError as exc:
-        return QuicklookResult(available=False, image_bytes=None, content_type="", reason=str(exc), debug=exc.debug_dict())
+        return QuicklookResult(
+            available=False,
+            image_bytes=None,
+            content_type="",
+            reason=f"CDSE authentication failed: {exc}",
+            debug=exc.debug_dict(),
+        )
 
     now = datetime.now(UTC)
     start = now - timedelta(days=LOOKBACK_DAYS)
     lon_min, lat_min, lon_max, lat_max = BBOX
+    render_bbox = list(BBOX)
 
-    data_filter: dict = {
-        "timeRange": {"from": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "to": now.strftime("%Y-%m-%dT%H:%M:%SZ")},
-        "mosaickingOrder": "mostRecent",
+    data_filter: dict[str, Any] = {
+        "timeRange": {
+            "from": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
     }
+    selected_metadata: dict | None = None
 
     if source_id == "sentinel-1":
         scene = stac.discover_latest_sentinel1_scene(BBOX, lookback_days=LOOKBACK_DAYS, timeout_s=25.0)
@@ -117,12 +127,58 @@ def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, 
         data_filter["acquisitionMode"] = pol_cfg.acquisition_mode
         data_filter["polarization"] = pol_cfg.polarization_mode
         evalscript = pol_cfg.evalscript
+        selected_metadata = {
+            "scene_id": scene.item_id,
+            "datetime": scene.datetime,
+            "polarization": pol_cfg.polarization_mode,
+            "bands": pol_cfg.bands,
+            "bbox": list(BBOX),
+        }
+    elif source_id == "sentinel-2":
+        s2_scene = stac.discover_best_sentinel2_scene(BBOX, lookback_days=LOOKBACK_DAYS, max_cloud_cover=50.0, timeout_s=25.0)
+        if s2_scene is None:
+            return QuicklookResult(
+                available=False,
+                image_bytes=None,
+                content_type="",
+                reason="No Sentinel-2 scene found via CDSE STAC in range",
+                debug={"bbox": list(BBOX), "lookback_days": LOOKBACK_DAYS},
+            )
+
+        # Narrow timeRange around the selected acquisition date/time so Sentinel Hub renders
+        # the specific clear acquisition rather than compositing unrelated cloudy scenes.
+        try:
+            scene_dt = datetime.fromisoformat(s2_scene.datetime.replace("Z", "+00:00"))
+            dt_from = (scene_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            dt_to = (scene_dt + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            dt_from = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+            dt_to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        data_filter["timeRange"] = {"from": dt_from, "to": dt_to}
+        data_filter["mosaickingOrder"] = "leastCC"
+        evalscript = config["evalscript"]
+        if s2_scene.bbox and len(s2_scene.bbox) == 4:
+            render_bbox = list(s2_scene.bbox)
+
+        selected_metadata = {
+            "scene_id": s2_scene.item_id,
+            "datetime": s2_scene.datetime,
+            "cloud_cover": s2_scene.cloud_cover,
+            "tile_id": s2_scene.tile_id,
+            "bbox": render_bbox,
+            "scene_bbox": list(s2_scene.bbox),
+        }
+        logger.info(
+            "Selected Sentinel-2 scene %s (cloud_cover=%.1f%%, dt=%s, bbox=%s) for Processing API request",
+            s2_scene.item_id, s2_scene.cloud_cover, s2_scene.datetime, render_bbox
+        )
     else:
         evalscript = config["evalscript"]
 
     request_body = {
         "input": {
-            "bounds": {"bbox": [lon_min, lat_min, lon_max, lat_max]},
+            "bounds": {"bbox": render_bbox},
             "data": [
                 {
                     "type": config["type"],
@@ -165,10 +221,16 @@ def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, 
             debug={
                 "upstream_status": response.status_code,
                 "upstream_body": response.text,
-                "request_bbox": list(BBOX),
+                "request_bbox": render_bbox,
                 "request_type": config["type"],
                 "request_time_range": {"from": start.isoformat(), "to": now.isoformat()},
             },
         )
 
-    return QuicklookResult(available=True, image_bytes=response.content, content_type="image/png", reason="OK")
+    return QuicklookResult(
+        available=True,
+        image_bytes=response.content,
+        content_type="image/png",
+        reason="OK",
+        metadata=selected_metadata,
+    )

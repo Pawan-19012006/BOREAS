@@ -230,7 +230,39 @@ def satellite_quicklook(source_id: str) -> Response:
         # not just a flattened message. Also logged server-side (see each
         # fetch module's logger.warning calls) for terminal visibility.
         raise HTTPException(status_code=503, detail={"reason": result.reason, "debug": result.debug})
-    return Response(content=result.image_bytes, media_type=result.content_type)
+
+    headers = {}
+    if result.metadata:
+        if "scene_id" in result.metadata:
+            headers["X-Sentinel-Scene-ID"] = str(result.metadata["scene_id"])
+        if "cloud_cover" in result.metadata and result.metadata["cloud_cover"] is not None and result.metadata["cloud_cover"] >= 0:
+            headers["X-Sentinel-Cloud-Cover"] = f"{result.metadata['cloud_cover']:.1f}%"
+        if "datetime" in result.metadata:
+            headers["X-Sentinel-Datetime"] = str(result.metadata["datetime"])
+        if "polarization" in result.metadata:
+            headers["X-Sentinel-Polarization"] = str(result.metadata["polarization"])
+        if "bands" in result.metadata:
+            headers["X-Sentinel-Bands"] = "/".join(result.metadata["bands"])
+        if "bbox" in result.metadata and result.metadata["bbox"]:
+            headers["X-Sentinel-Bbox"] = ",".join(str(coord) for coord in result.metadata["bbox"])
+
+    headers["Access-Control-Expose-Headers"] = (
+        "X-Sentinel-Scene-ID, X-Sentinel-Cloud-Cover, X-Sentinel-Datetime, "
+        "X-Sentinel-Polarization, X-Sentinel-Bands, X-Sentinel-Bbox"
+    )
+
+    return Response(content=result.image_bytes, media_type=result.content_type, headers=headers)
+
+
+@app.get("/satellite/{source_id}/metadata")
+def satellite_metadata(source_id: str) -> dict:
+    """Lightweight metadata endpoint exposing scene metadata (scene ID, datetime,
+    cloud cover, and rendered geographic bbox) for the cached quicklook scene.
+    """
+    result = get_quicklook(source_id)
+    if not result.available or not result.metadata:
+        raise HTTPException(status_code=503, detail={"reason": result.reason, "debug": result.debug})
+    return result.metadata
 
 
 @app.post("/route/plan", response_model=RoutePlanResponse)

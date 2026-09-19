@@ -24,7 +24,7 @@ export const sentinel1Source: LayerSource = {
   dataType: 'SAR (C-band Radar)',
   resolution: '~5–20 m',
   updateFrequency: '~6 days (NRT at high lat)',
-  description: 'Sentinel-1 C-band Synthetic Aperture Radar (VV/VH), most recent available scene over Prydz Bay via Copernicus Data Space Ecosystem.',
+  description: 'Sentinel-1 C-band Synthetic Aperture Radar, most recent available scene over Prydz Bay via Copernicus Data Space Ecosystem.',
   scaleText: '50 km',
   getStatus(): LayerStatus {
     return 'NOT CONNECTED';

@@ -17,5 +17,5 @@ export interface LayerSource {
   getStatus(): LayerStatus;
   getLastUpdated(): string;
   getLiveTileUrl(dateStr?: string, x?: number, y?: number, z?: number): string;
-  createImageryProvider(dateStr?: string): ImageryProvider | null;
+  createImageryProvider(dateStr?: string): ImageryProvider | Promise<ImageryProvider | null> | null;
 }

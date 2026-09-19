@@ -38,7 +38,7 @@ export const SatelliteDataPanel = ({ viewer }: SatelliteDataPanelProps) => {
     });
   };
 
-  const handleSyncToGlobe = (source: LayerSource, dateStr?: string) => {
+  const handleSyncToGlobe = async (source: LayerSource, dateStr?: string) => {
     if (!viewer) return;
 
     const dateToUse = dateStr || selectedDate;
@@ -54,7 +54,7 @@ export const SatelliteDataPanel = ({ viewer }: SatelliteDataPanelProps) => {
     }
 
     // Create and add new live imagery provider
-    const provider = source.createImageryProvider(dateToUse);
+    const provider = await source.createImageryProvider(dateToUse);
     if (!provider) {
       console.warn(`Could not create provider for ${source.name}`);
       return;

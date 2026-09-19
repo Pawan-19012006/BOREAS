@@ -130,3 +130,42 @@ def test_fusion_demo_endpoint():
     assert response.status_code == 200
     body = response.json()
     assert body["fused_variance"] < body["global_model_variance"]
+
+
+def test_satellite_quicklook_and_metadata_endpoints(monkeypatch):
+    from boreas_core.satellite.quicklook import Quicklook
+
+    mock_ql = Quicklook(
+        available=True,
+        image_bytes=b"\x89PNGfakeimage",
+        content_type="image/png",
+        reason="OK",
+        metadata={
+            "scene_id": "S2_TEST_SCENE",
+            "datetime": "2026-09-10T03:36:19Z",
+            "cloud_cover": 35.5,
+            "bbox": [75.04, -69.5, 77.81, -68.49],
+            "tile_id": "MGRS-43DED",
+        },
+    )
+
+    monkeypatch.setattr("boreas_core.api.server.get_quicklook", lambda source_id: mock_ql)
+
+    # 1. Test quicklook headers
+    resp = client.get("/satellite/sentinel-2/quicklook")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.headers["X-Sentinel-Scene-ID"] == "S2_TEST_SCENE"
+    assert resp.headers["X-Sentinel-Cloud-Cover"] == "35.5%"
+    assert resp.headers["X-Sentinel-Datetime"] == "2026-09-10T03:36:19Z"
+    assert resp.headers["X-Sentinel-Bbox"] == "75.04,-69.5,77.81,-68.49"
+
+    # 2. Test metadata endpoint
+    meta_resp = client.get("/satellite/sentinel-2/metadata")
+    assert meta_resp.status_code == 200
+    meta = meta_resp.json()
+    assert meta["scene_id"] == "S2_TEST_SCENE"
+    assert meta["cloud_cover"] == 35.5
+    assert meta["bbox"] == [75.04, -69.5, 77.81, -68.49]
+    assert meta["tile_id"] == "MGRS-43DED"
+
