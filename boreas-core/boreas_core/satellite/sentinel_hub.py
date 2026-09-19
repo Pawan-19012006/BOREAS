@@ -25,6 +25,7 @@ from typing import Literal
 import httpx
 
 from .cdse_auth import CdseAuthError, get_cdse_token
+from . import stac
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +35,6 @@ PROCESS_API_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
 BBOX = (74.0, -70.5, 78.5, -68.3)
 LOOKBACK_DAYS = 14
 OUTPUT_SIZE = 512
-
-_SENTINEL_1_EVALSCRIPT = """
-//VERSION=3
-function setup() {
-  return { input: ["VV", "VH"], output: { bands: 3 } };
-}
-function evaluatePixel(sample) {
-  let vv = Math.min(1, sample.VV * 8);
-  let vh = Math.min(1, sample.VH * 12);
-  return [vv, (vv + vh) / 2, vh];
-}
-"""
 
 _SENTINEL_2_EVALSCRIPT = """
 //VERSION=3
@@ -58,7 +47,7 @@ function evaluatePixel(sample) {
 """
 
 _SOURCE_CONFIG = {
-    "sentinel-1": {"type": "S1GRD", "evalscript": _SENTINEL_1_EVALSCRIPT},
+    "sentinel-1": {"type": "S1GRD"},
     "sentinel-2": {"type": "S2L2A", "evalscript": _SENTINEL_2_EVALSCRIPT},
 }
 
@@ -77,7 +66,7 @@ class QuicklookResult:
     debug: dict | None = None
 
 
-def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, timeout_s: float = 30.0) -> QuicklookResult:
+def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, timeout_s: float = 45.0) -> QuicklookResult:
     """Never raises -- any failure (missing/invalid credentials, network
     error, no scene found) degrades to `available=False` with a reason.
     """
@@ -94,21 +83,55 @@ def fetch_sentinel_quicklook(source_id: Literal["sentinel-1", "sentinel-2"], *, 
     start = now - timedelta(days=LOOKBACK_DAYS)
     lon_min, lat_min, lon_max, lat_max = BBOX
 
+    data_filter: dict = {
+        "timeRange": {"from": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "to": now.strftime("%Y-%m-%dT%H:%M:%SZ")},
+        "mosaickingOrder": "mostRecent",
+    }
+
+    if source_id == "sentinel-1":
+        scene = stac.discover_latest_sentinel1_scene(BBOX, lookback_days=LOOKBACK_DAYS, timeout_s=25.0)
+        if scene is None:
+            return QuicklookResult(
+                available=False,
+                image_bytes=None,
+                content_type="",
+                reason="No Sentinel-1 scene found via CDSE STAC in range",
+                debug={"bbox": list(BBOX), "lookback_days": LOOKBACK_DAYS},
+            )
+
+        try:
+            pol_cfg = stac.resolve_polarization_config(scene)
+        except ValueError as exc:
+            return QuicklookResult(
+                available=False,
+                image_bytes=None,
+                content_type="",
+                reason=str(exc),
+                debug={
+                    "item_id": scene.item_id,
+                    "polarizations": scene.polarizations,
+                    "instrument_mode": scene.instrument_mode,
+                },
+            )
+
+        data_filter["acquisitionMode"] = pol_cfg.acquisition_mode
+        data_filter["polarization"] = pol_cfg.polarization_mode
+        evalscript = pol_cfg.evalscript
+    else:
+        evalscript = config["evalscript"]
+
     request_body = {
         "input": {
             "bounds": {"bbox": [lon_min, lat_min, lon_max, lat_max]},
             "data": [
                 {
                     "type": config["type"],
-                    "dataFilter": {
-                        "timeRange": {"from": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "to": now.strftime("%Y-%m-%dT%H:%M:%SZ")},
-                        "mosaickingOrder": "mostRecent",
-                    },
+                    "dataFilter": data_filter,
                 }
             ],
         },
         "output": {"width": OUTPUT_SIZE, "height": OUTPUT_SIZE, "responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
-        "evalscript": config["evalscript"],
+        "evalscript": evalscript,
     }
 
     try:
