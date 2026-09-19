@@ -6,6 +6,7 @@ import { IcebergLayer } from '../layers/IcebergLayer';
 import { RouteLayer } from '../layers/RouteLayer';
 import { NavigationLayer } from '../layers/NavigationLayer';
 import { IceForecastHeatmapLayer } from '../layers/IceForecastHeatmapLayer';
+import { SatelliteImageryLayer } from '../layers/SatelliteImageryLayer';
 import type { DriftForecastResponse, EnsembleGridResponse, RouteOption, RoutePlanResponse, Vessel } from '../services/boreasApi';
 
 export interface LayerVisibility {
@@ -14,6 +15,8 @@ export interface LayerVisibility {
   risk: boolean;
   routes: boolean;
   forecast: boolean;
+  sentinel1: boolean;
+  sentinel2: boolean;
 }
 
 interface GlobeContainerProps {
@@ -128,6 +131,11 @@ export const GlobeContainer = ({
             vessel={navigationVessel}
           />
           <IceForecastHeatmapLayer viewer={viewer} visible={layerVisibility.forecast} grid={ensembleGrid ?? null} />
+          <SatelliteImageryLayer
+            viewer={viewer}
+            sentinel1Visible={layerVisibility.sentinel1}
+            sentinel2Visible={layerVisibility.sentinel2}
+          />
         </>
       )}
     </div>

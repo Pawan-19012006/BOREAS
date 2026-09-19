@@ -9,16 +9,29 @@ import FlyoutPanel from './components/FlyoutPanel';
 import RouteResultsPanel from './components/RouteResultsPanel';
 import GlobeControls from './components/GlobeControls';
 import StatusBar from './components/StatusBar';
+import ObserveHud from './components/ObserveHud';
+import TileModal from './components/TileModal';
+import { layerRegistry } from './layers/shared/LayerRegistry';
+import type { LayerSource } from './layers/shared/LayerSource';
 import { useSelectedEntity } from './hooks/useSelectedEntity';
 import { useLiveMissionData } from './hooks/useLiveMissionData';
 import { useEnsembleGrid } from './hooks/useEnsembleGrid';
 import { useCameraState } from './hooks/useCameraState';
 import { useBackendStatus } from './services/backendStatus';
+import { useSatelliteStatus } from './hooks/useSatelliteStatus';
 import { ICEBERGS, VESSEL_ROUTES } from './data/missionData';
 import { getCheckpointById } from './data/checkpoints';
 import './index.css';
 
-const DEFAULT_LAYERS: LayerVisibility = { icebergs: true, ice: true, risk: false, routes: true, forecast: false };
+const DEFAULT_LAYERS: LayerVisibility = {
+  icebergs: true,
+  ice: true,
+  risk: false,
+  routes: true,
+  forecast: false,
+  sentinel1: false,
+  sentinel2: false,
+};
 
 function App() {
   // No flyout open by default -- the idle state is just the globe, the
@@ -29,6 +42,13 @@ function App() {
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [selection, setSelection] = useSelectedEntity(viewer);
   const [navigationRoute, setNavigationRoute] = useState<NavigationRouteState | null>(null);
+  const [inspectSatelliteSource, setInspectSatelliteSource] = useState<LayerSource | null>(null);
+  const [satelliteDate, setSatelliteDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  });
+  const { isConnected, reasonFor } = useSatelliteStatus();
   const { state: backendState } = useBackendStatus();
   const { liveDrift, liveRoutes, boreasCoreOnline } = useLiveMissionData();
   const ensembleGrid = useEnsembleGrid();
@@ -94,7 +114,36 @@ function App() {
         onRouteChange={setNavigationRoute}
       />
 
+      <ObserveHud
+        visibility={layerVisibility}
+        onToggle={toggleLayer}
+        viewer={viewer}
+        backendOnline={backendState === 'online'}
+        onOpenSatelliteModal={(sourceId) => {
+          const src = layerRegistry.find((s) => s.id === sourceId);
+          if (src) setInspectSatelliteSource(src);
+        }}
+      />
+
       <RouteResultsPanel navigationRoute={navigationRoute} onRouteChange={setNavigationRoute} />
+
+      {inspectSatelliteSource && (
+        <TileModal
+          source={inspectSatelliteSource}
+          selectedDate={satelliteDate}
+          connected={isConnected(inspectSatelliteSource.id)}
+          notConnectedReason={reasonFor(inspectSatelliteSource.id)}
+          onDateChange={setSatelliteDate}
+          onClose={() => setInspectSatelliteSource(null)}
+          onSyncToGlobe={async (source) => {
+            if (source.id === 'sentinel-1' && !layerVisibility.sentinel1) {
+              toggleLayer('sentinel1');
+            } else if (source.id === 'sentinel-2' && !layerVisibility.sentinel2) {
+              toggleLayer('sentinel2');
+            }
+          }}
+        />
+      )}
 
       <FlyoutPanel
         activeTab={activeTab}

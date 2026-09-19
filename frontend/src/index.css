@@ -1894,3 +1894,468 @@ body,
   padding: 6px 12px;
   white-space: nowrap;
 }
+
+/* ============ BOREAS OBSERVE LAYER HUD & TACTICAL TELEMETRY ============ */
+.observe-hud {
+  position: fixed;
+  top: 60px;
+  left: 16px;
+  width: 320px;
+  max-height: calc(100vh - 100px);
+  background: rgba(14, 20, 28, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 1px rgba(56, 189, 248, 0.3);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  transition: width 240ms cubic-bezier(0.2, 0, 0, 1), transform 240ms cubic-bezier(0.2, 0, 0, 1);
+  overflow: hidden;
+}
+
+.observe-hud.collapsed {
+  width: auto;
+  min-width: 140px;
+  max-height: 48px;
+  cursor: pointer;
+  background: rgba(14, 20, 28, 0.92);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.observe-hud-header {
+  padding: 10px 14px 8px;
+  background: rgba(8, 14, 22, 0.65);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.hud-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hud-branding {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-pulse-radar {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 8px #38bdf8;
+  animation: radar-pulse 2s infinite ease-out;
+}
+
+@keyframes radar-pulse {
+  0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(56, 189, 248, 0); }
+  100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+}
+
+.hud-titles {
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-tag {
+  font: 8.5px var(--font-mono);
+  letter-spacing: 0.12em;
+  color: #38bdf8;
+  text-transform: uppercase;
+}
+
+.hud-main-title {
+  margin: 0;
+  font: 600 13px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: #f3f1ea;
+}
+
+.hud-collapse-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-muted);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 10px;
+  transition: all 160ms ease;
+}
+
+.hud-collapse-btn:hover {
+  border-color: #38bdf8;
+  color: #f3f1ea;
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.hud-status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  font: 9.5px var(--font-mono);
+  color: var(--text-dim);
+}
+
+.hud-utc-clock {
+  color: #94a3b8;
+  letter-spacing: 0.06em;
+}
+
+.hud-sys-chip {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.hud-sys-chip.online {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.hud-sys-chip.offline {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+.hud-collapsed-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font: 11px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+  cursor: pointer;
+}
+
+.observe-hud-content {
+  overflow-y: auto;
+  max-height: calc(100vh - 170px);
+  padding: 10px 12px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.2) transparent;
+}
+
+/* Telemetry Summary Matrix */
+.hud-telemetry-matrix {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.telemetry-cell {
+  background: rgba(10, 18, 28, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.telemetry-label {
+  font: 8px var(--font-mono);
+  letter-spacing: 0.1em;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+.telemetry-value {
+  font: 600 11.5px var(--font-mono);
+  color: #f3f1ea;
+  margin: 1px 0;
+  letter-spacing: 0.04em;
+}
+
+.telemetry-value.cyan {
+  color: #38bdf8;
+}
+
+.telemetry-value.amber {
+  color: #f5ce69;
+}
+
+.telemetry-sub {
+  font: 8px var(--font-mono);
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+/* Layer Groups */
+.hud-layer-group {
+  margin-bottom: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 8px;
+}
+
+.hud-group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font: 9px var(--font-mono);
+  letter-spacing: 0.12em;
+  color: #94a3b8;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+
+.group-count {
+  color: var(--text-dim);
+  font-size: 8px;
+}
+
+.hud-layer-item {
+  background: rgba(12, 20, 30, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin-bottom: 5px;
+  transition: all 160ms ease;
+}
+
+.hud-layer-item:hover {
+  background: rgba(18, 28, 42, 0.6);
+  border-color: rgba(56, 189, 248, 0.2);
+}
+
+.hud-layer-item.active {
+  background: rgba(14, 30, 48, 0.7);
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: inset 0 0 12px rgba(56, 189, 248, 0.06);
+}
+
+.hud-layer-item.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.layer-primary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.layer-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+}
+
+.layer-checkbox-wrap.disabled {
+  cursor: not-allowed;
+}
+
+.layer-checkbox-wrap input[type="checkbox"] {
+  display: none;
+}
+
+.hud-checkbox-custom {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 140ms ease;
+  position: relative;
+}
+
+.hud-checkbox-custom::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: #38bdf8;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 140ms ease;
+}
+
+.layer-checkbox-wrap input:checked + .hud-checkbox-custom {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.3);
+}
+
+.layer-checkbox-wrap input:checked + .hud-checkbox-custom::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.layer-title-text {
+  font: 11px var(--font-family);
+  color: #f3f1ea;
+}
+
+.layer-title-text strong {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.layer-title-text.disabled {
+  color: var(--text-dim);
+}
+
+.layer-hint-text {
+  font: 9px var(--font-mono);
+  color: var(--text-dim);
+  margin-top: 3px;
+  padding-left: 22px;
+}
+
+.sensor-tag {
+  font: 8px var(--font-mono);
+  letter-spacing: 0.08em;
+  padding: 2px 5px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+}
+
+.sensor-tag.sar {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.sensor-tag.optical {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.sensor-tag.live {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+}
+
+.sensor-tag.warning {
+  background: rgba(245, 206, 105, 0.15);
+  color: #f5ce69;
+}
+
+.sensor-tag.ai {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+}
+
+.sensor-tag.planned {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+/* Satellite Metadata Sub-Card */
+.hud-meta-card {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(6, 12, 18, 0.6);
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  border-radius: 3px;
+  font: 9px var(--font-mono);
+}
+
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.meta-key {
+  color: var(--text-dim);
+}
+
+.meta-val {
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+.mono-ellipsis {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-inspect-tile-btn {
+  width: 100%;
+  margin-top: 5px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font: 8.5px var(--font-mono);
+  letter-spacing: 0.08em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.hud-inspect-tile-btn:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+}
+
+/* Tactical Quick Sectors */
+.hud-quick-sectors {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sector-header {
+  font: 8.5px var(--font-mono);
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  display: block;
+  margin-bottom: 5px;
+}
+
+.sector-btn-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.sector-chip-btn {
+  background: rgba(15, 23, 36, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font: 9px var(--font-mono);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.sector-chip-btn:hover {
+  border-color: #38bdf8;
+  color: #f3f1ea;
+  background: rgba(56, 189, 248, 0.12);
+}
