@@ -18,6 +18,8 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
 | `GET` | `/forecast/ensemble-grid` | 32x32 spatial grid of ensemble mean and spread | None |
 | `GET` | `/edge/report` | Edge distillation and ONNX quantization benchmark metrics | None |
 | `POST` | `/fusion/demo` | Bayesian conjugate-Gaussian data fusion demo | None |
+| `GET` | `/observe/vessels` | Level 01 OBSERVE: Curated Antarctic vessel positions, headings, tracks, and statuses | None |
+| `GET` | `/observe/icebergs` | Level 01 OBSERVE: Tracked iceberg targets with dimensions, drift vectors, and risk levels | None |
 
 ---
 

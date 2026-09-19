@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { Viewer } from 'cesium';
 import { Cartesian3, Math as CesiumMath } from 'cesium';
 import type { LayerVisibility } from './GlobeContainer';
-import { ICEBERGS, VESSEL_ROUTES } from '../data/missionData';
 
 interface ObserveHudProps {
   viewer: Viewer | null;
@@ -10,6 +9,11 @@ interface ObserveHudProps {
   onToggle: (key: keyof LayerVisibility) => void;
   onOpenSatelliteModal?: (sourceId: 'sentinel-1' | 'sentinel-2') => void;
   backendOnline: boolean;
+  totalVessels?: number;
+  activeVessels?: number;
+  totalIcebergs?: number;
+  vesselsProvenance?: string;
+  icebergsProvenance?: string;
 }
 
 interface SatelliteMeta {
@@ -27,6 +31,11 @@ export const ObserveHud = ({
   onToggle,
   onOpenSatelliteModal,
   backendOnline,
+  totalVessels = 10,
+  activeVessels = 8,
+  totalIcebergs = 10,
+  vesselsProvenance = 'PROTOTYPE AIS — ESTIMATED TRANSIT',
+  icebergsProvenance = 'SYNTHETIC RADAR TRACKS — CDSE GROUNDED',
 }: ObserveHudProps) => {
   const [collapsed, setCollapsed] = useState(false);
   const [utcTime, setUtcTime] = useState('');
@@ -133,13 +142,13 @@ export const ObserveHud = ({
           <div className="hud-telemetry-matrix">
             <div className="telemetry-cell">
               <span className="telemetry-label">AIS FLEET</span>
-              <span className="telemetry-value cyan">{VESSEL_ROUTES.length} ACTIVE</span>
-              <span className="telemetry-sub">TRANSIT TRACKS</span>
+              <span className="telemetry-value cyan">{activeVessels} ACTIVE</span>
+              <span className="telemetry-sub">{totalVessels} TRACKED</span>
             </div>
             <div className="telemetry-cell">
               <span className="telemetry-label">ICEBERGS</span>
-              <span className="telemetry-value amber">{ICEBERGS.length} TRACKED</span>
-              <span className="telemetry-sub">DRIFT VECTORS</span>
+              <span className="telemetry-value amber">{totalIcebergs} DETECTED</span>
+              <span className="telemetry-sub">HAZARD TARGETS</span>
             </div>
             <div className="telemetry-cell">
               <span className="telemetry-label">ICE SEVERITY</span>
@@ -278,9 +287,9 @@ export const ObserveHud = ({
                     <strong>AIS Fleet</strong> & Transponders
                   </span>
                 </label>
-                <span className="sensor-tag live">{VESSEL_ROUTES.length} UNITS</span>
+                <span className="sensor-tag live">{totalVessels} UNITS</span>
               </div>
-              <div className="layer-hint-text">Confidence corridors, waypoints & ship beacons</div>
+              <div className="layer-hint-text">{vesselsProvenance}</div>
             </div>
 
             {/* Icebergs */}
@@ -297,9 +306,9 @@ export const ObserveHud = ({
                     <strong>Iceberg Hazards</strong> & Drift
                   </span>
                 </label>
-                <span className="sensor-tag warning">{ICEBERGS.length} BERGS</span>
+                <span className="sensor-tag warning">{totalIcebergs} TARGETS</span>
               </div>
-              <div className="layer-hint-text">Physics force-balance drift tracks & uncertainty cones</div>
+              <div className="layer-hint-text">{icebergsProvenance}</div>
             </div>
           </div>
 

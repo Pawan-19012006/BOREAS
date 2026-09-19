@@ -132,6 +132,25 @@ classDiagram
   - `lon: float`, `lat: float`: Current or last known geographic position.
   - `note: str`: Citation or status provenance.
 
+### 2.5 Level 01 OBSERVE Intelligence Models
+
+- **`ObservedVessel` (`boreas_core/observe/models.py`)**:
+  - `id: str`, `name: str`, `imo: str | None`, `mmsi: str | None`
+  - `vessel_type: str`, `ice_class: str`
+  - `latitude: float`, `longitude: float`, `heading_deg: float`, `speed_kt: float`
+  - `destination: str`, `eta: str`, `status: Literal["LIVE_AIS", "DEAD_RECKONING", "MOORED", "ICE_BOUND"]`
+  - `callsign: str | None`, `flag: str`, `track_history: list[list[float]]`
+  - `source: str`: Transparent simulation/provenance label (e.g. `"PROTOTYPE AIS — ESTIMATED TRANSIT"`)
+
+- **`ObservedIceberg` (`boreas_core/observe/models.py`)**:
+  - `id: str` (e.g. `A-23A`, `D-28`, `B-17`), `name: str`
+  - `latitude: float`, `longitude: float`, `drift_speed_kt: float`, `heading_deg: float`
+  - `length_m: float`, `width_m: float`, `thickness_m: float`, `area_km2: float`
+  - `risk_level: Literal["low", "guarded", "high", "critical"]`, `origin: str`, `confidence: float`
+  - `track_history: list[list[float]]`
+  - `detection_source: Literal["Sentinel-1", "Sentinel-2", "NIC Radar"]`
+  - `source: str`: Transparent simulation/provenance label (e.g. `"SYNTHETIC RADAR TRACK — CDSE GROUNDED"`)
+
 ---
 
 ## 3. Core Domain Dataclasses

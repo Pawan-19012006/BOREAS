@@ -206,3 +206,11 @@ export function fuseIndianData(request: FusionRequest) {
 export function getVesselRoster() {
   return getJson<VesselRosterResponse>('/vessels/roster');
 }
+
+export function getObservedVessels() {
+  return getJson<import('../types/observation').VesselsObserveResponse>('/observe/vessels');
+}
+
+export function getObservedIcebergs() {
+  return getJson<import('../types/observation').IcebergsObserveResponse>('/observe/icebergs');
+}

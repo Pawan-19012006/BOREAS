@@ -9,6 +9,8 @@ import { IceForecastHeatmapLayer } from '../layers/IceForecastHeatmapLayer';
 import { SatelliteImageryLayer } from '../layers/SatelliteImageryLayer';
 import type { DriftForecastResponse, EnsembleGridResponse, RouteOption, RoutePlanResponse, Vessel } from '../services/boreasApi';
 
+import type { ObservedIceberg, ObservedVessel } from '../types/observation';
+
 export interface LayerVisibility {
   icebergs: boolean;
   ice: boolean;
@@ -22,6 +24,8 @@ export interface LayerVisibility {
 interface GlobeContainerProps {
   onViewerReady?: (viewer: Viewer) => void;
   layerVisibility: LayerVisibility;
+  observedVessels?: ObservedVessel[];
+  observedIcebergs?: ObservedIceberg[];
   liveDrift?: Record<string, DriftForecastResponse>;
   liveRoutes?: Record<string, RoutePlanResponse>;
   navigationOptions?: RouteOption[];
@@ -34,6 +38,8 @@ interface GlobeContainerProps {
 export const GlobeContainer = ({
   onViewerReady,
   layerVisibility,
+  observedVessels,
+  observedIcebergs,
   liveDrift,
   liveRoutes,
   navigationOptions,
@@ -121,8 +127,8 @@ export const GlobeContainer = ({
       {viewer && (
         <>
           <IceConcentrationLayer viewer={viewer} iceVisible={layerVisibility.ice} riskVisible={layerVisibility.risk} />
-          <IcebergLayer viewer={viewer} visible={layerVisibility.icebergs} liveDrift={liveDrift} />
-          <RouteLayer viewer={viewer} visible={layerVisibility.routes} liveRoutes={liveRoutes} />
+          <IcebergLayer viewer={viewer} visible={layerVisibility.icebergs} observedIcebergs={observedIcebergs} liveDrift={liveDrift} />
+          <RouteLayer viewer={viewer} visible={layerVisibility.routes} observedVessels={observedVessels} liveRoutes={liveRoutes} />
           <NavigationLayer
             viewer={viewer}
             options={navigationOptions ?? []}

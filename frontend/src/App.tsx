@@ -19,6 +19,7 @@ import { useEnsembleGrid } from './hooks/useEnsembleGrid';
 import { useCameraState } from './hooks/useCameraState';
 import { useBackendStatus } from './services/backendStatus';
 import { useSatelliteStatus } from './hooks/useSatelliteStatus';
+import { useObserveIntelligence } from './hooks/useObserveIntelligence';
 import { ICEBERGS, VESSEL_ROUTES } from './data/missionData';
 import { getCheckpointById } from './data/checkpoints';
 import './index.css';
@@ -51,6 +52,15 @@ function App() {
   const { isConnected, reasonFor } = useSatelliteStatus();
   const { state: backendState } = useBackendStatus();
   const { liveDrift, liveRoutes, boreasCoreOnline } = useLiveMissionData();
+  const {
+    vessels: observedVessels,
+    icebergs: observedIcebergs,
+    vesselsProvenance,
+    icebergsProvenance,
+    activeVesselCount,
+    totalVesselCount,
+    totalIcebergCount,
+  } = useObserveIntelligence();
   const ensembleGrid = useEnsembleGrid();
   const cameraState = useCameraState(viewer);
 
@@ -65,24 +75,63 @@ function App() {
   const handleLocate = useCallback(
     (query: string) => {
       if (!viewer) return;
-      const normalized = query.trim().toUpperCase().replace(/\s+/g, ' ');
-      const berg = ICEBERGS.find((b) => b.id.toUpperCase() === normalized || b.name.toUpperCase() === normalized);
-      const vessel = VESSEL_ROUTES.find(
-        (v) => v.id.toUpperCase().replace('-', ' ') === normalized || v.name.toUpperCase() === normalized,
-      );
+      const clean = query.trim().toUpperCase();
+      const normalized = clean.replace(/[\s\-_]/g, '');
+
+      // Check icebergs (from live observed set, fallback to ICEBERGS)
+      const allBergs = observedIcebergs.length > 0 ? observedIcebergs : ICEBERGS;
+      const berg = allBergs.find((b) => {
+        const bIdClean = b.id.toUpperCase().replace(/[\s\-_]/g, '');
+        const bNameClean = b.name.toUpperCase().replace(/[\s\-_]/g, '');
+        return (
+          bIdClean === normalized ||
+          bNameClean.includes(normalized) ||
+          b.id.toUpperCase() === clean ||
+          b.name.toUpperCase().includes(clean)
+        );
+      });
+
+      // Check vessels (from live observed set, fallback to VESSEL_ROUTES)
+      const allVessels = observedVessels.length > 0 ? observedVessels : VESSEL_ROUTES;
+      const vessel = allVessels.find((v) => {
+        const vIdClean = v.id.toUpperCase().replace(/[\s\-_]/g, '');
+        const vNameClean = v.name.toUpperCase().replace(/[\s\-_]/g, '');
+        return (
+          vIdClean === normalized ||
+          vNameClean.includes(normalized) ||
+          v.id.toUpperCase() === clean ||
+          v.name.toUpperCase().includes(clean)
+        );
+      });
+
       const target = berg ?? vessel;
       if (!target) return;
 
-      const track = 'track' in target ? target.track : target.waypoints;
-      const [lon, lat] = track[track.length - 1];
+      const isBerg = Boolean(berg);
+      let lon = 0;
+      let lat = 0;
+
+      if ('longitude' in target && 'latitude' in target) {
+        lon = target.longitude;
+        lat = target.latitude;
+      } else if ('track' in target) {
+        const pt = target.track[target.track.length - 1];
+        lon = pt[0];
+        lat = pt[1];
+      } else if ('waypoints' in target) {
+        const pt = target.waypoints[target.waypoints.length - 1];
+        lon = pt[0];
+        lat = pt[1];
+      }
+
       viewer.camera.flyTo({
-        destination: Cartesian3.fromDegrees(lon, lat, 1500000),
+        destination: Cartesian3.fromDegrees(lon, lat, 1200000),
         orientation: { heading: CesiumMath.toRadians(0), pitch: CesiumMath.toRadians(-70), roll: 0 },
         duration: 1.5,
       });
-      setSelection({ kind: berg ? 'iceberg' : 'vessel', id: target.id });
+      setSelection({ kind: isBerg ? 'iceberg' : 'vessel', id: target.id });
     },
-    [viewer, setSelection],
+    [viewer, setSelection, observedIcebergs, observedVessels],
   );
 
   const navigationDestinationName = navigationRoute
@@ -94,6 +143,8 @@ function App() {
       <GlobeContainer
         onViewerReady={handleViewerReady}
         layerVisibility={layerVisibility}
+        observedVessels={observedVessels}
+        observedIcebergs={observedIcebergs}
         liveDrift={liveDrift}
         liveRoutes={liveRoutes}
         navigationOptions={navigationRoute?.options}
@@ -119,6 +170,11 @@ function App() {
         onToggle={toggleLayer}
         viewer={viewer}
         backendOnline={backendState === 'online'}
+        totalVessels={totalVesselCount}
+        activeVessels={activeVesselCount}
+        totalIcebergs={totalIcebergCount}
+        vesselsProvenance={vesselsProvenance}
+        icebergsProvenance={icebergsProvenance}
         onOpenSatelliteModal={(sourceId) => {
           const src = layerRegistry.find((s) => s.id === sourceId);
           if (src) setInspectSatelliteSource(src);
@@ -158,6 +214,8 @@ function App() {
         selection={selection}
         onClear={() => setSelection(null)}
         backendState={backendState}
+        observedVessels={observedVessels}
+        observedIcebergs={observedIcebergs}
         liveDrift={liveDrift}
         liveRoutes={liveRoutes}
         boreasCoreOnline={boreasCoreOnline}

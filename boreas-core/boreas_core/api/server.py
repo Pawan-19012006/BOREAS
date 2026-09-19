@@ -20,6 +20,12 @@ from boreas_core.routing.directions import build_route_legs
 from boreas_core.routing.grid import synthetic_southern_ocean_grid
 from boreas_core.satellite.quicklook import get_quicklook
 from boreas_core.satellite.status import get_all_statuses
+from boreas_core.observe import (
+    IcebergsObserveResponse,
+    VesselsObserveResponse,
+    get_observed_icebergs,
+    get_observed_vessels,
+)
 from boreas_core.uncertainty.ood import ConfidenceAssessment
 from boreas_core.vessels import live_lookup
 from boreas_core.vessels.roster import ROSTER
@@ -180,6 +186,22 @@ def vessels_roster() -> VesselRosterResponse:
             )
         )
     return VesselRosterResponse(vessels=vessels)
+
+
+@app.get("/observe/vessels", response_model=VesselsObserveResponse)
+def observe_vessels() -> VesselsObserveResponse:
+    """Returns deterministic Antarctic vessel traffic observation picture
+    for Level 01 OBSERVE. Discloses prototype simulation provenance.
+    """
+    return get_observed_vessels()
+
+
+@app.get("/observe/icebergs", response_model=IcebergsObserveResponse)
+def observe_icebergs() -> IcebergsObserveResponse:
+    """Returns deterministic tracked iceberg hazard picture for Level 01 OBSERVE.
+    Grounded in Antarctic glaciological positions and CDSE sensor footprints.
+    """
+    return get_observed_icebergs()
 
 
 def _legs_out(legs) -> list[RouteLegOut]:
