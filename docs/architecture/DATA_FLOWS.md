@@ -18,6 +18,7 @@ $$\text{Input} \longrightarrow \text{Transformation} \longrightarrow \text{Servi
 - [Flow I: Sentinel-2 Multispectral Optical Pipeline](#flow-i-sentinel-2-multispectral-optical-pipeline)
 - [Flow J: Copernicus Marine Sea-Ice Concentration Raster](#flow-j-copernicus-marine-sea-ice-concentration-raster)
 - [Flow K: CesiumJS 3D Virtual Globe Draping & Interaction](#flow-k-cesiumjs-3d-virtual-globe-draping--interaction)
+- [Flow L: Level 02 Unified State & Prediction Engine Flow](#flow-l-level-02-unified-state--prediction-engine-flow)
 
 ---
 
@@ -411,3 +412,57 @@ sequenceDiagram
 - **API**: Internal Cesium Event Loop (`ScreenSpaceEventHandler`).
 - **Output**: Updated `selection` state driving `InspectorPanel.tsx`.
 - **Consumer**: Ship navigation operator viewing real-time telemetry, confidence levels, and SHAP explainability.
+
+---
+
+## Flow L: Level 02 Unified State & Prediction Engine Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Ship Navigator / Operator
+    participant UI as ForecastTimeline.tsx / ObserveHud.tsx
+    participant Client as boreasApi.ts
+    participant StateService as boreas_core/state/service.py
+    participant ForecastService as boreas_core/forecast/service.py
+    participant IcebergEng as IcebergTrajectoryEngine
+    participant SeaIceEng as SeaIceForecastEngine
+    participant EnvEng as EnvironmentalForecastEngine
+    participant Globe as GlobeContainer.tsx / IcebergLayer.tsx
+
+    Note over User,Globe: Step 1: Baseline Current State Synthesis
+    UI->>Client: getCurrentState()
+    Client->>StateService: GET /state/current
+    StateService->>StateService: Aggregate observed vessels, icebergs, sea-ice, weather
+    StateService-->>Client: CurrentState X(t) with data quality & provenance
+    Client-->>UI: Populate Current HUD telemetry
+
+    Note over User,Globe: Step 2: Interactive Forecast Timeline Scrubbing (e.g. T+48H)
+    User->>UI: Selects horizon (+48H)
+    UI->>Client: getFutureState(48)
+    Client->>ForecastService: GET /forecast/state?horizon_hours=48
+    par Distributed Forecast Engines
+        ForecastService->>IcebergEng: predict_all(icebergs, 48)
+        IcebergEng-->>ForecastService: Projected icebergs + expanding uncertainty corridor
+    and
+        ForecastService->>SeaIceEng: predict_grid(current_sic, 48)
+        SeaIceEng-->>ForecastService: Evolved 32x32 SIC grid + regional concentration
+    and
+        ForecastService->>EnvEng: predict(48)
+        EnvEng-->>ForecastService: Synoptic wind, waves, temp, visibility
+    end
+    ForecastService-->>Client: FutureStateResponse X(t+48)
+    Client-->>UI: Update ObserveHud (T+48H, 72% ice, 10 targets, 18kt wind, 2.8m waves)
+    Client-->>Globe: Update IcebergLayer (predicted positions, future trajectories, uncertainty corridors)
+    Client-->>Globe: Update IceForecastHeatmapLayer (evolved raster at +48h)
+```
+
+- **Input**: User selects a forecast stop (`NOW`, `+12H`, `+24H`, `+48H`, `+72H`, `+96H`, `+120H`) on the `ForecastTimeline.tsx`.
+- **Transformation**: `useForecastState` queries `/forecast/state?horizon_hours=h` and `/forecast/icebergs`.
+- **Engines**:
+  - `IcebergTrajectoryEngine`: Kinematic integration with Coriolis drift and monotonic uncertainty corridor growth ($r(h) = r_0 + \alpha \cdot h^{1.14}$).
+  - `SeaIceForecastEngine`: Deterministic spatial evolution with advection and thermodynamic consolidation.
+  - `EnvironmentalForecastEngine`: Polar synoptic wave model predicting wind, wave height, temperature, pressure, visibility.
+- **Output**: `FutureStateResponse` representing $X(t+h)$.
+- **Consumer**: `IcebergLayer.tsx` moves iceberg beacons, renders glowing trajectory paths, and drapes translucent expanding uncertainty ellipses; `ObserveHud.tsx` updates forecast cards; `InspectorPanel.tsx` reveals predicted waypoints and uncertainty bounds.
+

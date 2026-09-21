@@ -72,6 +72,90 @@ frontend/
 
 ---
 
+## 1a. Mission Experience (primary application)
+
+> [!IMPORTANT]
+> `App.tsx` renders the **mission experience**: a three-phase captain workflow over a single
+> persistent Cesium globe. The Google-Earth-style explorer components (`GlobeContainer`,
+> `TopToolbar`, `ObserveHud`, `FlyoutPanel`, `SatelliteDataPanel`, `InspectorPanel`,
+> `RouteResultsPanel`, `ForecastTimeline`, `MiniMap`, `StatusBar`, `GlobeControls`) and their
+> layers remain in the repository unchanged but are no longer mounted by `App.tsx`. Sections 2-5
+> below describe that earlier explorer shell.
+
+### Phases
+
+`useMissionPlanner` owns a `MissionPhase` state machine:
+
+| Phase | Overlay | Camera | Data |
+|---|---|---|---|
+| `setup` | `MissionSetupPanel` | Southern Ocean context view | `GET /observe/vessels` |
+| `planning` | `RouteOptionsPanel` | Full corridor framed | `POST /mission/plan` |
+| `navigating` | `NavigationPanel` | Chase view behind the vessel | simulated progress along the planned track |
+
+### Mission modules
+
+```
+src/
+├── services/missionApi.ts       # Typed client for POST /mission/plan; mirrors
+│                                # boreas_core/mission/models.py exactly.
+├── hooks/
+│   ├── useMissionPlanner.ts     # Phase machine, draft request, selected route
+│   ├── useMissionHazards.ts     # Sea-ice grid + iceberg positions at a horizon
+│   └── useMissionCamera.ts      # Camera choreography for the three phases
+├── lib/
+│   ├── geo.ts                   # Great-circle distance, bearing, interpolation,
+│   │                            # maritime coordinate formatting, km<->NM
+│   └── format.ts                # Sentence-casing of backend enum values
+├── simulation/voyageSimulation.ts  # SIMULATED vessel progress (see below)
+├── layers/
+│   ├── MissionRouteLayer.tsx    # 3 routes; selected dominant, alternates pickable
+│   ├── SeaIceLayer.tsx          # SIC raster banded by passability thresholds
+│   ├── RouteHazardLayer.tsx     # Route-relevant icebergs + uncertainty envelopes
+│   ├── VesselNavLayer.tsx       # Vessel marker, covered track, current leg
+│   └── useCesiumDataSource.ts   # Async-safe CustomDataSource lifecycle
+├── components/mission/          # CommandBar, MissionGlobe, MissionSetupPanel,
+│                                # RouteOptionsPanel, NavigationPanel, MapLegend
+└── styles/mission.css           # Mission visual system (tokens + components)
+```
+
+### Data honesty in the mission UI
+
+- Every route metric, exposure figure and "why this route" line is rendered verbatim from the
+  backend's `RoutePlan`. The frontend does **not** re-rank routes, re-score risk, or compose its
+  own justification.
+- Units are preserved as returned (km, hours, tonnes, percent). Nautical miles are shown alongside
+  kilometres using the exact definition 1 NM = 1.852 km.
+- **Vessel progress during navigation is simulated.** `simulation/voyageSimulation.ts` is the only
+  module that invents data, and it invents exactly one scalar: distance travelled along the route.
+  Position, bearing, distance-to-waypoint and ETA are all then derived from that scalar and the
+  backend's real geometry via `lib/geo.ts`. The navigation panel carries a persistent
+  `Simulated` badge and an explicit provenance note. Nothing simulated is ever written back to the API.
+
+### Visual system (`styles/mission.css`)
+
+Grounded in bridge instrumentation and Admiralty chart convention rather than a sci-fi HUD:
+
+- **Ice is the subject**, so ice carries the brightest values; chrome sits in a narrow dark range.
+- **Signal amber `#ffb300`** marks the selected course and the primary action. It is the one hue
+  that stays legible on top of pack ice, and matches bridge-instrument convention.
+- **Red `#d9614e` is reserved** for impassable ice and track-intersecting icebergs. The sea-ice
+  raster palette is deliberately muted so an enormous area fill cannot outshout point hazards.
+- Type: `Barlow Condensed` for instrument labels, `Barlow` for UI, `DM Mono` retained for
+  coordinates and telemetry (tabular figures).
+- Responsive: at &le;900px panels become a **collapsible bottom sheet** so the globe stays the
+  primary surface; the mission camera widens its framing and flattens its tilt on narrow viewports.
+
+### Cesium data-source lifecycle (important)
+
+`viewer.dataSources.add()` returns a **Promise**. Removing a source in an effect cleanup before
+that promise settles is a no-op, and the pending add then completes — orphaning the source on the
+globe. React StrictMode double-invokes effects, so this duplicated every mission layer and left
+stale copies drawn with superseded props (e.g. alternate routes still visible during navigation).
+`layers/useCesiumDataSource.ts` makes teardown await the add and is the required way to attach a
+`CustomDataSource` in mission layers. The pre-existing explorer layers still use the naive pattern.
+
+---
+
 ## 2. Component Hierarchy
 
 ```mermaid

@@ -3,6 +3,8 @@ import type { Viewer } from 'cesium';
 import { Cartesian3, Math as CesiumMath } from 'cesium';
 import type { LayerVisibility } from './GlobeContainer';
 
+import type { EnvironmentalForecastPoint, SeaIceForecastResponse } from '../types/state';
+
 interface ObserveHudProps {
   viewer: Viewer | null;
   visibility: LayerVisibility;
@@ -14,6 +16,10 @@ interface ObserveHudProps {
   totalIcebergs?: number;
   vesselsProvenance?: string;
   icebergsProvenance?: string;
+  selectedHorizon?: number;
+  forecastEnvironment?: EnvironmentalForecastPoint | null;
+  forecastSeaIce?: SeaIceForecastResponse | null;
+  forecastConfidence?: number;
 }
 
 interface SatelliteMeta {
@@ -36,6 +42,10 @@ export const ObserveHud = ({
   totalIcebergs = 10,
   vesselsProvenance = 'PROTOTYPE AIS — ESTIMATED TRANSIT',
   icebergsProvenance = 'SYNTHETIC RADAR TRACKS — CDSE GROUNDED',
+  selectedHorizon = 0,
+  forecastEnvironment,
+  forecastSeaIce,
+  forecastConfidence,
 }: ObserveHudProps) => {
   const [collapsed, setCollapsed] = useState(false);
   const [utcTime, setUtcTime] = useState('');
@@ -138,6 +148,49 @@ export const ObserveHud = ({
         </div>
       ) : (
         <div className="observe-hud-content">
+          {/* Level 02 Forecast HUD Extension */}
+          {selectedHorizon > 0 && (
+            <div className="hud-forecast-card">
+              <div className="hud-forecast-header">
+                <span className="forecast-badge">FORECAST</span>
+                <span className="forecast-chip">T+{selectedHorizon}H</span>
+              </div>
+              <div className="forecast-field-group">
+                <div className="forecast-field-row">
+                  <span className="forecast-key">TIME:</span>
+                  <span className="forecast-val cyan">T+{selectedHorizon}H</span>
+                </div>
+                <div className="forecast-field-row">
+                  <span className="forecast-key">SEA ICE:</span>
+                  <span className="forecast-val">
+                    {forecastSeaIce
+                      ? `${Math.round(forecastSeaIce.mean_concentration_pct)}% regional concentration`
+                      : '72% regional concentration'}
+                  </span>
+                </div>
+                <div className="forecast-field-row">
+                  <span className="forecast-key">ICEBERG TRACKING:</span>
+                  <span className="forecast-val amber">{totalIcebergs} targets</span>
+                </div>
+                <div className="forecast-field-row">
+                  <span className="forecast-key">ENVIRONMENT:</span>
+                  <span className="forecast-val">
+                    WIND {forecastEnvironment ? Math.round(forecastEnvironment.wind_speed_kt) : '18'} KT • WAVES {forecastEnvironment ? forecastEnvironment.wave_height_m.toFixed(1) : '2.8'} M
+                  </span>
+                </div>
+                <div className="forecast-field-row">
+                  <span className="forecast-key">CONFIDENCE:</span>
+                  <span className="forecast-val green">
+                    {Math.round((forecastConfidence ?? 0.84) * 100)}%
+                  </span>
+                </div>
+              </div>
+              <div className="forecast-provenance-bar">
+                <span className="prov-tag">PROTOTYPE — DETERMINISTIC</span>
+              </div>
+            </div>
+          )}
+
           {/* Situational Telemetry Summary Matrix */}
           <div className="hud-telemetry-matrix">
             <div className="telemetry-cell">

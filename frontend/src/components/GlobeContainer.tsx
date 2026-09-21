@@ -33,6 +33,8 @@ interface GlobeContainerProps {
   navigationDestinationName?: string;
   navigationVessel?: Vessel | null;
   ensembleGrid?: EnsembleGridResponse | null;
+  forecastMap?: Record<string, import('../types/state').IcebergForecast>;
+  selectedHorizon?: number;
 }
 
 export const GlobeContainer = ({
@@ -47,6 +49,8 @@ export const GlobeContainer = ({
   navigationDestinationName,
   navigationVessel,
   ensembleGrid,
+  forecastMap,
+  selectedHorizon = 0,
 }: GlobeContainerProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerInstanceRef = useRef<Viewer | null>(null);
@@ -127,7 +131,14 @@ export const GlobeContainer = ({
       {viewer && (
         <>
           <IceConcentrationLayer viewer={viewer} iceVisible={layerVisibility.ice} riskVisible={layerVisibility.risk} />
-          <IcebergLayer viewer={viewer} visible={layerVisibility.icebergs} observedIcebergs={observedIcebergs} liveDrift={liveDrift} />
+          <IcebergLayer
+            viewer={viewer}
+            visible={layerVisibility.icebergs}
+            observedIcebergs={observedIcebergs}
+            liveDrift={liveDrift}
+            forecastMap={forecastMap}
+            selectedHorizon={selectedHorizon}
+          />
           <RouteLayer viewer={viewer} visible={layerVisibility.routes} observedVessels={observedVessels} liveRoutes={liveRoutes} />
           <NavigationLayer
             viewer={viewer}

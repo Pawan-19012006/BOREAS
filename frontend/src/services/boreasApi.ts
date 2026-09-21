@@ -214,3 +214,32 @@ export function getObservedVessels() {
 export function getObservedIcebergs() {
   return getJson<import('../types/observation').IcebergsObserveResponse>('/observe/icebergs');
 }
+
+export function getCurrentState() {
+  return getJson<import('../types/state').CurrentState>('/state/current');
+}
+
+export function getIcebergForecasts(horizon_hours?: number) {
+  const params: Record<string, number> = {};
+  if (horizon_hours !== undefined) {
+    params.horizon_hours = horizon_hours;
+  }
+  return getJson<import('../types/state').IcebergForecast[]>('/forecast/icebergs', params);
+}
+
+export function getSeaIceForecast(horizon_hours?: number) {
+  const params: Record<string, number> = {};
+  if (horizon_hours !== undefined) {
+    params.horizon_hours = horizon_hours;
+  }
+  return getJson<import('../types/state').SeaIceForecastResponse>('/forecast/sea-ice', params);
+}
+
+export function getEnvironmentalForecast() {
+  return getJson<import('../types/state').EnvironmentalForecastResponse>('/forecast/environment');
+}
+
+export function getFutureState(horizon_hours: number) {
+  return getJson<import('../types/state').FutureStateResponse>('/forecast/state', { horizon_hours });
+}
+

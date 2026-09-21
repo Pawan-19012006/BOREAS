@@ -33,6 +33,7 @@ BOREAS/
 │   │   ├── explain/         # SHAP TreeExplainer & template rationales
 │   │   ├── fusion/          # Bayesian inverse-variance data fusion
 │   │   ├── physics/         # Hydrodynamic drag, Coriolis, RK4 drift, XGBoost residual
+│   │   ├── mission/         # Cape Town → Bharati/Maitri mission planner (POST /mission/plan)
 │   │   ├── routing/         # A*, PPO RL policy, PolarRoute adapter, scoring, directions
 │   │   ├── satellite/       # CDSE OAuth2, Sentinel Hub, Copernicus Marine, quicklooks
 │   │   ├── uncertainty/     # Mahalanobis OOD, deep ensemble, fallback buffers
@@ -86,6 +87,7 @@ All backend endpoints are in `boreas_core/api/server.py` and validated by Pydant
 | `/forecast/ensemble-grid` | `GET` | Query params | `EnsembleGridResponse` | 32x32 mean & spread grid |
 | `/edge/report` | `GET` | None | `EdgeReportResponse` | Distillation & quantization metrics |
 | `/fusion/demo` | `POST` | `FusionRequest` | `FusionResponse` | Bayesian conjugate-Gaussian update |
+| `/mission/plan` | `POST` | `MissionPlanRequest` | `MissionPlanResponse` | Cape Town → Bharati/Maitri: 3 routes (recommended / low-risk / fast-fuel) at a forecast horizon |
 
 ---
 
@@ -150,11 +152,15 @@ npm run dev -- --port 5174
 | **Residual Correction Model** | `boreas_core/physics/residual_model.py`, `data/synthetic_drift.py` |
 | **A* Graph Search & Cost** | `boreas_core/routing/astar.py`, `grid.py` |
 | **RL Re-planning Policy** | `boreas_core/routing/policy.py`, `env.py`, `train_ppo.py` |
+| **Mission Route Planning** | `boreas_core/mission/planner.py`, `fields.py`, `config.py` |
 | **PolarRoute Baseline** | `boreas_core/routing/polarroute_adapter.py`, `scoring.py` |
 | **Out-of-Distribution & Fallbacks** | `boreas_core/uncertainty/ood.py`, `fallback.py` |
 | **Satellite Fetching & Auth** | `boreas_core/satellite/cdse_auth.py`, `sentinel_hub.py`, `copernicus_marine_fetch.py` |
 | **Vessel Fleet & Live AIS** | `boreas_core/vessels/roster.py`, `live_lookup.py` |
-| **Cesium Globe & Layers** | `frontend/src/components/GlobeContainer.tsx`, `frontend/src/layers/` |
+| **Mission UI (primary app)** | `frontend/src/App.tsx`, `frontend/src/components/mission/`, `frontend/src/services/missionApi.ts` |
+| **Mission map layers** | `frontend/src/layers/MissionRouteLayer.tsx`, `SeaIceLayer.tsx`, `RouteHazardLayer.tsx`, `VesselNavLayer.tsx` |
+| **Navigation maths / simulation** | `frontend/src/lib/geo.ts`, `frontend/src/simulation/voyageSimulation.ts` |
+| **Cesium Globe & Layers (legacy explorer)** | `frontend/src/components/GlobeContainer.tsx`, `frontend/src/layers/` |
 | **Voyage Planning UI** | `frontend/src/components/TopToolbar.tsx`, `RouteResultsPanel.tsx`, `NavigationLayer.tsx` |
 | **Feature Flyout Panels** | `frontend/src/components/FlyoutPanel.tsx`, `frontend/src/components/panels/` |
 | **API Client & Hooks** | `frontend/src/services/boreasApi.ts`, `frontend/src/hooks/` |

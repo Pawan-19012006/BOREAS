@@ -26,6 +26,24 @@ from boreas_core.observe import (
     get_observed_icebergs,
     get_observed_vessels,
 )
+from boreas_core.state import CurrentState, get_current_state
+from boreas_core.forecast import (
+    EnvironmentalForecastResponse,
+    FutureStateResponse,
+    IcebergForecast,
+    SeaIceForecastResponse,
+    get_environmental_forecast,
+    get_future_state,
+    get_iceberg_forecasts,
+    get_sea_ice_forecast,
+)
+from boreas_core.mission import (
+    MissionPlanRequest,
+    MissionPlanResponse,
+    NoRouteFound,
+    VesselNotFound,
+    plan_mission,
+)
 from boreas_core.uncertainty.ood import ConfidenceAssessment
 from boreas_core.vessels import live_lookup
 from boreas_core.vessels.roster import ROSTER
@@ -202,6 +220,45 @@ def observe_icebergs() -> IcebergsObserveResponse:
     Grounded in Antarctic glaciological positions and CDSE sensor footprints.
     """
     return get_observed_icebergs()
+
+
+@app.get("/state/current", response_model=CurrentState)
+def state_current() -> CurrentState:
+    """Unified Canonical Current State snapshot X(t) composing vessels,
+    tracked icebergs, sea ice, atmospheric forcing, and sensor provenance.
+    """
+    return get_current_state()
+
+
+@app.get("/forecast/icebergs", response_model=list[IcebergForecast])
+def forecast_icebergs(horizon_hours: int | None = None) -> list[IcebergForecast]:
+    """Kinematic drift predictions and expanding uncertainty envelopes for
+    all tracked iceberg hazards across horizons (+12h to +120h).
+    """
+    return get_iceberg_forecasts(horizon_hours=horizon_hours)
+
+
+@app.get("/forecast/sea-ice", response_model=SeaIceForecastResponse)
+def forecast_sea_ice(horizon_hours: int = 72) -> SeaIceForecastResponse:
+    """Deterministic spatial sea-ice concentration grid prediction for a
+    given forecast horizon (+12h to +120h).
+    """
+    return get_sea_ice_forecast(horizon_hours=horizon_hours)
+
+
+@app.get("/forecast/environment", response_model=EnvironmentalForecastResponse)
+def forecast_environment(horizon_hours: int | None = None) -> EnvironmentalForecastResponse:
+    """Atmospheric and wave forcing forecast across horizons (+12h to +120h)."""
+    return get_environmental_forecast(horizon_hours=horizon_hours)
+
+
+@app.get("/forecast/state", response_model=FutureStateResponse)
+def forecast_future_state(horizon_hours: int = 72) -> FutureStateResponse:
+    """Unified Canonical Future State representation X(t+h) serving as the
+    primary foundation for Level 03 Risk Evaluation and Routing Detours.
+    """
+    return get_future_state(horizon_hours=horizon_hours)
+
 
 
 def _legs_out(legs) -> list[RouteLegOut]:
@@ -460,6 +517,20 @@ def plan_route(request: RoutePlanRequest) -> RoutePlanResponse:
     ]
 
     return RoutePlanResponse(options=options, warnings=warnings)
+
+
+@app.post("/mission/plan", response_model=MissionPlanResponse)
+def mission_plan(request: MissionPlanRequest) -> MissionPlanResponse:
+    """Three route alternatives (recommended / low-risk / fastest-fuel) for a
+    Cape Town -> Bharati/Maitri mission, judged on the forecast hazard state at
+    `horizon_hours` -- see boreas_core/mission/planner.py. PROTOTYPE, deterministic.
+    """
+    try:
+        return plan_mission(request)
+    except VesselNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown vessel_id: {exc.args[0]}") from exc
+    except NoRouteFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/forecast/ensemble-summary", response_model=EnsembleSummaryResponse)

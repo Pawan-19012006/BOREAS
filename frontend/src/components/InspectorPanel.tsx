@@ -6,6 +6,8 @@ import type { DriftForecastResponse, RoutePlanResponse } from '../services/borea
 import type { ObservedIceberg, ObservedVessel } from '../types/observation';
 import ConfidenceBar from './panels/ConfidenceBar';
 
+import type { IcebergForecast } from '../types/state';
+
 interface InspectorPanelProps {
   selection: Selection | null;
   onClear: () => void;
@@ -15,6 +17,8 @@ interface InspectorPanelProps {
   liveDrift?: Record<string, DriftForecastResponse>;
   liveRoutes?: Record<string, RoutePlanResponse>;
   boreasCoreOnline?: boolean;
+  selectedHorizon?: number;
+  icebergForecasts?: Record<string, IcebergForecast>;
 }
 
 export const InspectorPanel = ({
@@ -26,6 +30,8 @@ export const InspectorPanel = ({
   liveDrift,
   liveRoutes,
   boreasCoreOnline,
+  selectedHorizon = 0,
+  icebergForecasts,
 }: InspectorPanelProps) => {
   let body: ReactNode = null;
   let title = '';
@@ -48,31 +54,55 @@ export const InspectorPanel = ({
       const origin = bergFromObs?.origin ?? bergFallback!.origin ?? 'Antarctic Ice Shelf';
       const detectionSource = bergFromObs?.detection_source ?? bergFallback!.detectionSource ?? 'Sentinel-1';
       const sourceLabel = bergFromObs?.source ?? bergFallback!.source;
-      const confidence = live ? live.confidence : (bergFromObs?.confidence ?? bergFallback!.confidence);
       const riskLevel = live?.degraded ? 'critical' : (bergFromObs?.risk_level ?? bergFallback!.riskLevel);
+
+      const forecast = icebergForecasts?.[selection.id];
+      const forecastPt =
+        selectedHorizon > 0 && forecast
+          ? forecast.forecast_points.find((p) => p.horizon_hours === selectedHorizon)
+          : null;
+
+      const displayConfidence = forecastPt ? forecastPt.confidence : (live ? live.confidence : (bergFromObs?.confidence ?? bergFallback!.confidence));
+      const displayDriftSpeed = forecastPt ? forecastPt.drift_speed_kt : driftSpeedKt;
+      const displayHeading = forecastPt ? forecastPt.heading_deg : headingDeg;
 
       body = (
         <>
           <div className={`object-badge risk-${riskLevel}`}>
-            {riskLevel.toUpperCase()} RISK • {detectionSource.toUpperCase()}
+            {selectedHorizon > 0 ? `T+${selectedHorizon}H FORECAST • ${riskLevel.toUpperCase()} RISK` : `${riskLevel.toUpperCase()} RISK • ${detectionSource.toUpperCase()}`}
           </div>
           <div className="inspector-field-grid">
             <div className="inspector-field"><label>Name</label><span>{name}</span></div>
             <div className="inspector-field"><label>Dimensions</label><span>{(lengthM / 1000).toFixed(1)} × {(widthM / 1000).toFixed(1)} km</span></div>
             <div className="inspector-field"><label>Thickness / Area</label><span>{thicknessM}m / {areaKm2.toLocaleString()} km²</span></div>
-            <div className="inspector-field"><label>Drift Speed</label><span>{driftSpeedKt.toFixed(1)} kt</span></div>
-            <div className="inspector-field"><label>Heading</label><span>{headingDeg.toFixed(0)}°</span></div>
-            <div className="inspector-field"><label>Origin</label><span>{origin}</span></div>
-            <div className="inspector-field"><label>Sensor Source</label><span>{detectionSource}</span></div>
-            <div className="inspector-field"><label>Data Provenance</label><span>{live ? 'boreas-core physics + residual' : sourceLabel}</span></div>
+            {forecastPt ? (
+              <>
+                <div className="inspector-field"><label>Forecast Horizon</label><span className="cyan">T+{selectedHorizon}H</span></div>
+                <div className="inspector-field"><label>Current Pos (T+0)</label><span>{bergFromObs ? `${bergFromObs.latitude.toFixed(2)}°, ${bergFromObs.longitude.toFixed(2)}°` : 'Base Epoch'}</span></div>
+                <div className="inspector-field"><label>Predicted Pos</label><span className="cyan">{forecastPt.latitude.toFixed(3)}°, {forecastPt.longitude.toFixed(3)}°</span></div>
+                <div className="inspector-field"><label>Uncertainty Radius</label><span className="amber">±{forecastPt.uncertainty_radius_km.toFixed(1)} km</span></div>
+                <div className="inspector-field"><label>Predicted Drift</label><span>{displayDriftSpeed.toFixed(1)} kt @ {displayHeading.toFixed(0)}°</span></div>
+                <div className="inspector-field"><label>Provenance</label><span>PROTOTYPE — DETERMINISTIC DRIFT</span></div>
+              </>
+            ) : (
+              <>
+                <div className="inspector-field"><label>Drift Speed</label><span>{driftSpeedKt.toFixed(1)} kt</span></div>
+                <div className="inspector-field"><label>Heading</label><span>{headingDeg.toFixed(0)}°</span></div>
+                <div className="inspector-field"><label>Origin</label><span>{origin}</span></div>
+                <div className="inspector-field"><label>Sensor Source</label><span>{detectionSource}</span></div>
+                <div className="inspector-field"><label>Data Provenance</label><span>{live ? 'boreas-core physics + residual' : sourceLabel}</span></div>
+              </>
+            )}
           </div>
-          <ConfidenceBar value={confidence} />
+          <ConfidenceBar value={displayConfidence} />
           <p className="inspector-rationale">
-            {live
+            {forecastPt
+              ? `Kinematic drift trajectory projected +${selectedHorizon}h. Uncertainty envelope expands non-linearly to ±${forecastPt.uncertainty_radius_km.toFixed(1)} km with ${Math.round(forecastPt.confidence * 100)}% model confidence.`
+              : live
               ? live.rationale
               : boreasCoreOnline === false
-                ? 'boreas-core is offline — showing deterministic track record.'
-                : `Observed via ${detectionSource}. Projected trajectory cone reflects ensemble spread with ${Math.round(confidence * 100)}% tracking confidence.`}
+              ? 'boreas-core is offline — showing deterministic track record.'
+              : `Observed via ${detectionSource}. Projected trajectory cone reflects ensemble spread with ${Math.round(displayConfidence * 100)}% tracking confidence.`}
           </p>
         </>
       );

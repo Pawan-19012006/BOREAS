@@ -14,12 +14,15 @@ import {
 import { ICEBERGS } from '../data/missionData';
 import type { DriftForecastResponse } from '../services/boreasApi';
 import type { ObservedIceberg } from '../types/observation';
+import type { IcebergForecast } from '../types/state';
 
 interface IcebergLayerProps {
   viewer: Viewer;
   visible: boolean;
   observedIcebergs?: ObservedIceberg[];
   liveDrift?: Record<string, DriftForecastResponse>;
+  forecastMap?: Record<string, IcebergForecast>;
+  selectedHorizon?: number;
 }
 
 const RISK_COLOR: Record<string, string> = {
@@ -31,7 +34,6 @@ const RISK_COLOR: Record<string, string> = {
 
 // Compute forward projected drift vector endpoint
 function calculateDriftEndpoint(lon: number, lat: number, headingDeg: number, speedKt: number): [number, number] {
-  // 6-hour drift vector projection in km: speedKt * 1.852 * 6 (clamped for readability between 15km and 60km)
   const distanceKm = Math.max(15, Math.min(speedKt * 1.852 * 6, 60));
   const R = 6371;
   const radLat = (lat * Math.PI) / 180;
@@ -52,7 +54,14 @@ function calculateDriftEndpoint(lon: number, lat: number, headingDeg: number, sp
   return [(endLonRad * 180) / Math.PI, (endLatRad * 180) / Math.PI];
 }
 
-export const IcebergLayer = ({ viewer, visible, observedIcebergs, liveDrift }: IcebergLayerProps) => {
+export const IcebergLayer = ({
+  viewer,
+  visible,
+  observedIcebergs,
+  liveDrift,
+  forecastMap,
+  selectedHorizon = 0,
+}: IcebergLayerProps) => {
   const sourceRef = useRef<CustomDataSource | null>(null);
 
   useEffect(() => {
@@ -85,19 +94,32 @@ export const IcebergLayer = ({ viewer, visible, observedIcebergs, liveDrift }: I
         });
 
     bergsToRender.forEach((berg) => {
-      const positions = berg.track_history.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 100));
-      const currentLon = berg.longitude;
-      const currentLat = berg.latitude;
+      const historicalPositions = berg.track_history.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 100));
+      const baseLon = berg.longitude;
+      const baseLat = berg.latitude;
       const live = liveDrift?.[berg.id];
+      const forecast = forecastMap?.[berg.id];
+
+      // Find predicted point at selected horizon if in forecast mode
+      const forecastPt =
+        selectedHorizon > 0 && forecast
+          ? forecast.forecast_points.find((p) => p.horizon_hours === selectedHorizon)
+          : null;
+
+      // Current active rendered position (at selected horizon or baseline)
+      const currentLon = forecastPt ? forecastPt.longitude : baseLon;
+      const currentLat = forecastPt ? forecastPt.latitude : baseLat;
+      const currentHeading = forecastPt ? forecastPt.heading_deg : berg.heading_deg;
+      const currentSpeed = forecastPt ? forecastPt.drift_speed_kt : berg.drift_speed_kt;
 
       const riskLevel = live?.degraded ? 'critical' : berg.risk_level;
       const riskColorHex = RISK_COLOR[riskLevel] || '#f5ce69';
       const isHighRisk = riskLevel === 'high' || riskLevel === 'critical';
 
-      // 1. Observed Historical Drift Track
+      // 1. Observed Historical Drift Track (Dashed Cyan/Blue)
       source.entities.add({
         polyline: {
-          positions,
+          positions: historicalPositions,
           width: 2,
           material: new PolylineDashMaterialProperty({
             color: Color.fromCssColorString('#38bdf8').withAlpha(0.75),
@@ -106,8 +128,62 @@ export const IcebergLayer = ({ viewer, visible, observedIcebergs, liveDrift }: I
         },
       });
 
-      // 2. Physics / Residual Forecast Trajectory (if available)
-      if (live && live.track) {
+      // 2. Future Predicted Trajectory (Multi-Horizon Polylines)
+      if (forecast && forecast.forecast_points.length > 0) {
+        // Build trajectory from base point through all future horizon points
+        const trajectoryPoints = [
+          Cartesian3.fromDegrees(baseLon, baseLat, 150),
+          ...forecast.forecast_points.map((p) => Cartesian3.fromDegrees(p.longitude, p.latitude, 150)),
+        ];
+
+        // Draw predicted trajectory line
+        source.entities.add({
+          polyline: {
+            positions: trajectoryPoints,
+            width: selectedHorizon > 0 ? 3.0 : 2.0,
+            material: new PolylineGlowMaterialProperty({
+              glowPower: selectedHorizon > 0 ? 0.25 : 0.15,
+              color: Color.fromCssColorString(selectedHorizon > 0 ? '#38bdf8' : '#0284c7').withAlpha(0.9),
+            }),
+          },
+        });
+
+        // 3. Expanding Uncertainty Corridor (Ellipses at Horizon Waypoints)
+        forecast.forecast_points.forEach((pt) => {
+          const isCurrentSelectedStep = pt.horizon_hours === selectedHorizon;
+          const radiusMeters = pt.uncertainty_radius_km * 1000;
+
+          // Render uncertainty ellipse corridor
+          source.entities.add({
+            position: Cartesian3.fromDegrees(pt.longitude, pt.latitude, 40),
+            ellipse: {
+              semiMajorAxis: radiusMeters,
+              semiMinorAxis: radiusMeters * 0.75,
+              rotation: (pt.heading_deg * Math.PI) / 180,
+              material: Color.fromCssColorString(
+                isCurrentSelectedStep ? '#38bdf8' : '#0ea5e9'
+              ).withAlpha(isCurrentSelectedStep ? 0.22 : 0.08),
+              outline: true,
+              outlineColor: Color.fromCssColorString(
+                isCurrentSelectedStep ? '#38bdf8' : '#0ea5e9'
+              ).withAlpha(isCurrentSelectedStep ? 0.85 : 0.35),
+              height: 40,
+            },
+          });
+
+          // Small waypoint dot along predicted track
+          source.entities.add({
+            position: Cartesian3.fromDegrees(pt.longitude, pt.latitude, 200),
+            point: {
+              pixelSize: isCurrentSelectedStep ? 8 : 5,
+              color: Color.fromCssColorString(isCurrentSelectedStep ? '#38bdf8' : '#94a3b8'),
+              outlineColor: Color.BLACK,
+              outlineWidth: 1.5,
+            },
+          });
+        });
+      } else if (live && live.track) {
+        // Fallback live drift polyline if legacy endpoint was used
         source.entities.add({
           polyline: {
             positions: live.track.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 100)),
@@ -120,45 +196,63 @@ export const IcebergLayer = ({ viewer, visible, observedIcebergs, liveDrift }: I
         });
       }
 
-      // 3. Approximate Physical Footprint (Oriented Ellipse)
-      // Represent dimensions: major axis length_m, minor axis width_m
-      const rotationRad = (berg.heading_deg * Math.PI) / 180;
+      // 4. Ghost footprint at T+0 observation epoch when in forecast mode
+      if (selectedHorizon > 0) {
+        const baseRotationRad = (berg.heading_deg * Math.PI) / 180;
+        source.entities.add({
+          position: Cartesian3.fromDegrees(baseLon, baseLat, 30),
+          ellipse: {
+            semiMajorAxis: Math.max(berg.length_m / 2, 1000),
+            semiMinorAxis: Math.max(berg.width_m / 2, 600),
+            rotation: baseRotationRad,
+            material: Color.fromCssColorString('#64748b').withAlpha(0.2),
+            outline: true,
+            outlineColor: Color.fromCssColorString('#94a3b8').withAlpha(0.5),
+            height: 30,
+          },
+        });
+      }
+
+      // 5. Approximate Physical Footprint (Oriented Ellipse) at Active Position
+      const rotationRad = (currentHeading * Math.PI) / 180;
       source.entities.add({
         position: Cartesian3.fromDegrees(currentLon, currentLat, 50),
         ellipse: {
           semiMajorAxis: Math.max(berg.length_m / 2, 1000),
           semiMinorAxis: Math.max(berg.width_m / 2, 600),
           rotation: rotationRad,
-          material: Color.fromCssColorString('#e0f2fe').withAlpha(0.4),
+          material: Color.fromCssColorString('#e0f2fe').withAlpha(selectedHorizon > 0 ? 0.6 : 0.4),
           outline: true,
-          outlineColor: Color.fromCssColorString('#7dd3fc').withAlpha(0.85),
+          outlineColor: Color.fromCssColorString(selectedHorizon > 0 ? '#38bdf8' : '#7dd3fc').withAlpha(0.85),
           height: 30,
         },
       });
 
-      // 4. Uncertainty / Confidence Exclusion Perimeter
-      const confidence = live ? live.confidence : berg.confidence;
-      const uncertaintyRadius = Math.max(berg.length_m, 20000) + (1 - confidence) * 60000;
-      source.entities.add({
-        position: Cartesian3.fromDegrees(currentLon, currentLat, 20),
-        ellipse: {
-          semiMajorAxis: uncertaintyRadius,
-          semiMinorAxis: uncertaintyRadius * 0.6,
-          rotation: rotationRad,
-          material: Color.fromCssColorString(riskColorHex).withAlpha(isHighRisk ? 0.14 : 0.08),
-          outline: true,
-          outlineColor: Color.fromCssColorString(riskColorHex).withAlpha(isHighRisk ? 0.65 : 0.35),
-          height: 20,
-        },
-      });
+      // 6. Base Exclusion Perimeter
+      if (selectedHorizon === 0) {
+        const confidence = live ? live.confidence : berg.confidence;
+        const uncertaintyRadius = Math.max(berg.length_m, 20000) + (1 - confidence) * 60000;
+        source.entities.add({
+          position: Cartesian3.fromDegrees(currentLon, currentLat, 20),
+          ellipse: {
+            semiMajorAxis: uncertaintyRadius,
+            semiMinorAxis: uncertaintyRadius * 0.6,
+            rotation: rotationRad,
+            material: Color.fromCssColorString(riskColorHex).withAlpha(isHighRisk ? 0.14 : 0.08),
+            outline: true,
+            outlineColor: Color.fromCssColorString(riskColorHex).withAlpha(isHighRisk ? 0.65 : 0.35),
+            height: 20,
+          },
+        });
+      }
 
-      // 5. Drift Vector Arrow (projected drift heading)
-      if (berg.drift_speed_kt > 0.1) {
+      // 7. Drift Vector Arrow (projected drift heading)
+      if (currentSpeed > 0.1) {
         const [driftEndLon, driftEndLat] = calculateDriftEndpoint(
           currentLon,
           currentLat,
-          berg.heading_deg,
-          berg.drift_speed_kt
+          currentHeading,
+          currentSpeed
         );
 
         source.entities.add({
@@ -176,20 +270,25 @@ export const IcebergLayer = ({ viewer, visible, observedIcebergs, liveDrift }: I
         });
       }
 
-      // 6. Tactical Beacon Point + Metadata Label (Click Target)
+      // 8. Tactical Beacon Point + Metadata Label (Click Target)
+      const labelText =
+        selectedHorizon > 0 && forecastPt
+          ? ` ${berg.id} [T+${selectedHorizon}H]\n ${currentSpeed.toFixed(1)}KT • CONF ${(forecastPt.confidence * 100).toFixed(0)}% • ±${forecastPt.uncertainty_radius_km.toFixed(1)}KM`
+          : ` ${berg.id} [${riskLevel.toUpperCase()}]\n ${berg.drift_speed_kt.toFixed(1)}KT • ${berg.detection_source}`;
+
       source.entities.add({
         id: `iceberg:${berg.id}`,
         position: Cartesian3.fromDegrees(currentLon, currentLat, 1200),
         point: {
           pixelSize: isHighRisk ? 12 : 9,
-          color: Color.WHITE,
+          color: selectedHorizon > 0 ? Color.fromCssColorString('#38bdf8') : Color.WHITE,
           outlineColor: Color.fromCssColorString(riskColorHex),
           outlineWidth: isHighRisk ? 4 : 2.5,
         },
         label: {
-          text: ` ${berg.id} [${riskLevel.toUpperCase()}]\n ${berg.drift_speed_kt.toFixed(1)}KT • ${berg.detection_source}`,
+          text: labelText,
           font: 'bold 10px "DM Mono", monospace',
-          fillColor: Color.fromCssColorString(riskColorHex),
+          fillColor: Color.fromCssColorString(selectedHorizon > 0 ? '#7dd3fc' : riskColorHex),
           outlineColor: Color.fromCssColorString('#020617'),
           outlineWidth: 3,
           style: LabelStyle.FILL_AND_OUTLINE,
@@ -206,7 +305,7 @@ export const IcebergLayer = ({ viewer, visible, observedIcebergs, liveDrift }: I
       }
       sourceRef.current = null;
     };
-  }, [viewer, observedIcebergs, liveDrift]);
+  }, [viewer, observedIcebergs, liveDrift, forecastMap, selectedHorizon]);
 
   useEffect(() => {
     if (sourceRef.current) sourceRef.current.show = visible;

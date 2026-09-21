@@ -21,6 +21,24 @@ boreas-core/
 │   │   ├── __init__.py
 │   │   └── synthetic_drift.py  # Physics-consistent synthetic drift dataset generator
 │   ├── edge/                   # Edge distillation & low-bandwidth sync
+│   ├── explain/                # Explainability engine
+│   ├── forecast/               # Level 02 PREDICTION Subsystem
+│   │   ├── __init__.py
+│   │   ├── models.py           # Iceberg, sea-ice, environment, and future state schemas
+│   │   ├── iceberg.py          # IcebergTrajectoryEngine (kinematic drift + uncertainty corridor)
+│   │   ├── sea_ice.py          # SeaIceForecastEngine (deterministic spatial evolution)
+│   │   ├── environment.py      # EnvironmentalForecastEngine (synoptic polar weather)
+│   │   └── service.py          # Unified FutureState synthesis service
+│   ├── fusion/                 # Multi-source data fusion
+│   ├── observe/                # Level 01 OBSERVE feeds (vessels, icebergs, CDSE)
+│   ├── physics/                # Core hydrodynamic & thermodynamic drift physics
+│   ├── routing/                # Route planning & optimization
+│   ├── satellite/              # Satellite Earth Observation ingestion
+│   ├── state/                  # Level 02 UNIFIED CURRENT STATE X(t)
+│   │   ├── __init__.py
+│   │   ├── models.py           # CurrentState, SeaIceCurrentState, Ocean, Weather schemas
+│   │   └── service.py          # Composition of canonical current state from observe feeds
+│   ├── uncertainty/            # Uncertainty quantification & safe fallbacks
 │   │   ├── __init__.py
 │   │   ├── distill.py          # Student CNN distillation training loop
 │   │   ├── quantize.py         # ONNX export & dynamic INT8 quantization
@@ -141,7 +159,33 @@ boreas-core/
 - **`quantize.py`**: Exports PyTorch graphs to ONNX and executes ONNX Runtime dynamic INT8 quantization.
 - **`sync.py`**: `WeightDelta` calculates float16 parameter diffs; `StoreAndForwardQueue` buffers offline predictions until satellite connectivity resumes.
 
+### 2.8 State Subsystem (`boreas_core.state`)
+- **Status**: `CURRENT` / `PROTOTYPE`
+- **`models.py`**: Canonical representation for `CurrentState`, aggregating `ObservedVessel`, `ObservedIceberg`, `SeaIceCurrentState`, `OceanCurrentState`, `WeatherCurrentState`, `BathymetryState`, and `DataQualityState`.
+- **`service.py`**: `get_current_state()` aggregates observations from `observe_service` without duplicating underlying vessel or iceberg models. Attaches truthful provenance tags (`REAL`, `DERIVED`, `PROTOTYPE`, `SIMULATED`, `PLANNED`). Forms the canonical input vector $X(t)$.
+
+### 2.9 Forecast Subsystem (`boreas_core.forecast`)
+- **Status**: `PROTOTYPE` (Deterministic & Replaceable)
+- **`models.py`**: Pydantic models for `IcebergForecastPoint`, `IcebergForecast`, `SeaIceForecastResponse`, `EnvironmentalForecastPoint`, `EnvironmentalForecastResponse`, and `FutureStateResponse`.
+- **`iceberg.py`**: `IcebergTrajectoryEngine` simulates deterministic kinematic drift:
+  $$\vec{v}_{\text{drift}} = \vec{v}_{\text{current}} + \alpha \vec{v}_{\text{wind}} + \vec{v}_{\text{residual}}$$
+  Integrates Coriolis turning angle ($30^\circ$ left in Southern Hemisphere) and generates non-linearly expanding uncertainty envelopes:
+  $$r(h) = r_0 + 0.18 \cdot h^{1.14}$$
+  Confidence decays gracefully with lead time from $0.94$ down to $0.65$.
+- **`sea_ice.py`**: `SeaIceForecastEngine` simulates spatial advection, pack consolidation, and thermodynamics across the canonical 32x32 polar grid. Serves as a modular, replaceable forecasting interface for future Fourier Neural Operator (FNO) or NEMO/SI3 integration.
+- **`environment.py`**: `EnvironmentalForecastEngine` computes multi-horizon synoptic meteorology (wind speed, wind direction, wave height, air/surface temperature, pressure, visibility) based on sub-polar synoptic low dynamics.
+- **`service.py`**: `get_future_state(horizon_hours)` synthesizes future state vector $X(t+h)$ across all forecast engines. Directly consumed by Level 03 Risk Evaluation and Route Optimization.
+
 ---
+
+### 2.10 Mission Subsystem (`boreas_core.mission`)
+- **Status**: `PROTOTYPE` (deterministic, replaceable; not validated)
+- **Purpose**: `POST /mission/plan` — Cape Town → Bharati/Maitri, three route alternatives.
+- **`config.py`**: mission definitions, coarse navigation domain (lon −10…95, lat −71…−33, 1°), configurable SIC passability thresholds (default 30/60/80 %), vessel constraint profiles derived from `ice_class`, and iceberg risk factors.
+- **`fields.py`**: `build_snapshot(horizon)` assembles the hazard state from the existing `forecast` services (sea-ice grid, iceberg forecast points with uncertainty, environment). `FieldModel.evaluate(lon, lat)` is the single source of truth for sea-ice risk, iceberg halo risk, weather risk, speed factor and fuel penalty — used on the grid for planning and on the final polyline for metrics. `NavGrid` is a `RiskGrid` with a fast haversine so the unchanged `routing.astar.astar_route` stays fast. A crude southern-Africa land block is applied; there is no Antarctic coastline.
+- **`planner.py`**: cost per cell = `distance × (1 + 10 × penalty)`, penalty = weighted mix of risk / fuel / ETA fields. A candidate pool is built from A* runs over several weight vectors plus k-alternatives (corridors of earlier routes penalised). Roles are then assigned from *measured* metrics: RECOMMENDED = best min–max-normalised composite under the request weights; LOW-RISK = lowest risk among the rest; FASTEST/FUEL = lowest ETA+fuel among the rest. Fuel = distance × vessel t/km × environmental multiplier (`PROTOTYPE ESTIMATE`). Explanations are strings templated from the route's metrics.
+- **Not used**: `ensemble_export.npz`, PolarRoute, PPO.
+- **Known limits**: hazards are one T+horizon snapshot for the whole transit; weather is a uniform simulated state scaled by latitude band; the existing sea-ice engine yields up to ~0.23 SIC in open ocean at −45…−54° and none north of −45°; on these low-contrast synthetic fields the routes' risk/ETA spreads are small and a role may coincide with RECOMMENDED's qualities (a warning is emitted when a role's route is not better than RECOMMENDED); IMPASSABLE ice is penalised, not hard-blocked, so the station approach stays reachable.
 
 ## 3. In-Memory State & Lifecycle (`state.py`)
 

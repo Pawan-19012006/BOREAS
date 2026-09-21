@@ -2359,3 +2359,270 @@ body,
   color: #f3f1ea;
   background: rgba(56, 189, 248, 0.12);
 }
+
+/* ==========================================================================
+   LEVEL 02: FORECAST TIMELINE & FORECAST HUD
+   ========================================================================== */
+
+/* Global Forecast Timeline Dock */
+.forecast-timeline-container {
+  position: fixed;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.forecast-timeline-glass {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(6, 13, 22, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 8px;
+  padding: 8px 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65), 0 0 18px rgba(56, 189, 248, 0.12);
+}
+
+.timeline-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-play-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.timeline-play-btn:hover {
+  background: rgba(56, 189, 248, 0.25);
+  border-color: #38bdf8;
+  transform: scale(1.06);
+}
+
+.timeline-play-btn.playing {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #f87171;
+  color: #f87171;
+}
+
+.timeline-mode-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline-mode-tag {
+  font: 700 7.5px var(--font-mono);
+  letter-spacing: 0.14em;
+  color: #38bdf8;
+  text-transform: uppercase;
+}
+
+.timeline-horizon-headline {
+  font: 700 13px var(--font-mono);
+  letter-spacing: 0.04em;
+  color: #f8fafc;
+}
+
+.timeline-track-wrapper {
+  position: relative;
+  width: 380px;
+  padding: 10px 0;
+}
+
+.timeline-track-rail {
+  position: absolute;
+  top: 14px;
+  left: 8px;
+  right: 8px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+}
+
+.timeline-track-progress {
+  height: 100%;
+  background: linear-gradient(90deg, #0284c7, #38bdf8);
+  border-radius: 2px;
+  transition: width 200ms ease;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+}
+
+.timeline-stops-row {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.timeline-stop-node {
+  background: transparent;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 2px 4px;
+  transition: all 140ms ease;
+}
+
+.stop-marker {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  transition: all 150ms ease;
+}
+
+.timeline-stop-node:hover .stop-marker {
+  border-color: #38bdf8;
+  transform: scale(1.2);
+}
+
+.timeline-stop-node.active .stop-marker {
+  background: #38bdf8;
+  border-color: #ffffff;
+  box-shadow: 0 0 10px #38bdf8;
+  transform: scale(1.25);
+}
+
+.stop-label {
+  font: 700 9px var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  transition: color 150ms ease;
+}
+
+.timeline-stop-node:hover .stop-label {
+  color: #e2e8f0;
+}
+
+.timeline-stop-node.active .stop-label {
+  color: #38bdf8;
+  font-weight: 800;
+}
+
+.timeline-meta-dock {
+  display: flex;
+  align-items: center;
+}
+
+.timeline-prov-chip {
+  font: 7.5px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.5);
+  white-space: nowrap;
+}
+
+.timeline-loading-pulse {
+  font: 700 8.5px var(--font-mono);
+  letter-spacing: 0.1em;
+  color: #38bdf8;
+  animation: pulse 1s infinite alternate;
+}
+
+/* Observe HUD Forecast Card */
+.hud-forecast-card {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(6, 13, 22, 0.7));
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 6px;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.hud-forecast-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.forecast-badge {
+  font: 800 8.5px var(--font-mono);
+  letter-spacing: 0.12em;
+  color: #38bdf8;
+  text-transform: uppercase;
+}
+
+.forecast-chip {
+  font: 700 9px var(--font-mono);
+  background: rgba(56, 189, 248, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #e0f2fe;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.forecast-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.forecast-field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font: 9.5px var(--font-mono);
+}
+
+.forecast-key {
+  color: var(--text-dim);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.forecast-val {
+  color: #f1f5f9;
+  font-weight: 600;
+  text-align: right;
+}
+
+.forecast-val.cyan {
+  color: #38bdf8;
+  font-weight: 800;
+}
+
+.forecast-val.amber {
+  color: #f59e0b;
+}
+
+.forecast-val.green {
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.forecast-provenance-bar {
+  margin-top: 7px;
+  padding-top: 5px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+  font: 7px var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+

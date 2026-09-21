@@ -1,237 +1,259 @@
-import { useCallback, useState } from 'react';
-import type { Viewer } from 'cesium';
-import { Cartesian3, Math as CesiumMath } from 'cesium';
-import TopToolbar, { type NavigationRouteState } from './components/TopToolbar';
-import GlobeContainer, { type LayerVisibility } from './components/GlobeContainer';
-import SatelliteDataPanel from './components/SatelliteDataPanel';
-import InspectorPanel from './components/InspectorPanel';
-import FlyoutPanel from './components/FlyoutPanel';
-import RouteResultsPanel from './components/RouteResultsPanel';
-import GlobeControls from './components/GlobeControls';
-import StatusBar from './components/StatusBar';
-import ObserveHud from './components/ObserveHud';
-import TileModal from './components/TileModal';
-import { layerRegistry } from './layers/shared/LayerRegistry';
-import type { LayerSource } from './layers/shared/LayerSource';
-import { useSelectedEntity } from './hooks/useSelectedEntity';
-import { useLiveMissionData } from './hooks/useLiveMissionData';
-import { useEnsembleGrid } from './hooks/useEnsembleGrid';
-import { useCameraState } from './hooks/useCameraState';
-import { useBackendStatus } from './services/backendStatus';
-import { useSatelliteStatus } from './hooks/useSatelliteStatus';
-import { useObserveIntelligence } from './hooks/useObserveIntelligence';
-import { ICEBERGS, VESSEL_ROUTES } from './data/missionData';
-import { getCheckpointById } from './data/checkpoints';
-import './index.css';
+// BOREAS — Antarctic maritime route planning and navigation.
+//
+// One surface, three states: set up the voyage, compare the routes boreas-core
+// returned, then take the chosen one and get under way. The globe is mounted
+// once and persists across all three; only the overlay and the camera change.
 
-const DEFAULT_LAYERS: LayerVisibility = {
-  icebergs: true,
-  ice: true,
-  risk: false,
-  routes: true,
-  forecast: false,
-  sentinel1: false,
-  sentinel2: false,
-};
+import { useCallback, useMemo, useState } from 'react';
+import type { Viewer } from 'cesium';
+
+import MissionGlobe from './components/mission/MissionGlobe';
+import CommandBar from './components/mission/CommandBar';
+import MissionSetupPanel from './components/mission/MissionSetupPanel';
+import RouteOptionsPanel from './components/mission/RouteOptionsPanel';
+import NavigationPanel from './components/mission/NavigationPanel';
+import MapLegend from './components/mission/MapLegend';
+
+import MissionRouteLayer from './layers/MissionRouteLayer';
+import SeaIceLayer from './layers/SeaIceLayer';
+import RouteHazardLayer from './layers/RouteHazardLayer';
+import VesselNavLayer from './layers/VesselNavLayer';
+
+import { useMissionPlanner } from './hooks/useMissionPlanner';
+import { useMissionHazards } from './hooks/useMissionHazards';
+import { useMissionCamera } from './hooks/useMissionCamera';
+import { useObserveIntelligence } from './hooks/useObserveIntelligence';
+import { useBackendStatus } from './services/backendStatus';
+import { useVoyageSimulation } from './simulation/voyageSimulation';
+import { getMission } from './services/missionApi';
+import type { LonLat } from './lib/geo';
+
+import './index.css';
+import './styles/mission.css';
 
 function App() {
-  // No flyout open by default -- the idle state is just the globe, the
-  // toolbar, and the status bar.
-  const [activeTab, setActiveTab] = useState('');
-  const [tileStripVisible, setTileStripVisible] = useState(false);
   const [viewer, setViewer] = useState<Viewer | null>(null);
-  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYERS);
-  const [selection, setSelection] = useSelectedEntity(viewer);
-  const [navigationRoute, setNavigationRoute] = useState<NavigationRouteState | null>(null);
-  const [inspectSatelliteSource, setInspectSatelliteSource] = useState<LayerSource | null>(null);
-  const [satelliteDate, setSatelliteDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().split('T')[0];
-  });
-  const { isConnected, reasonFor } = useSatelliteStatus();
+  const [focusedIcebergId, setFocusedIcebergId] = useState<string | null>(null);
+  const [followVessel, setFollowVessel] = useState(true);
+  // Only has an effect at bottom-sheet widths; see .panel-dock in mission.css.
+  const [isSheetCollapsed, setSheetCollapsed] = useState(false);
+
   const { state: backendState } = useBackendStatus();
-  const { liveDrift, liveRoutes, boreasCoreOnline } = useLiveMissionData();
+  const { vessels } = useObserveIntelligence();
+
   const {
-    vessels: observedVessels,
-    icebergs: observedIcebergs,
-    vesselsProvenance,
-    icebergsProvenance,
-    activeVesselCount,
-    totalVesselCount,
-    totalIcebergCount,
-  } = useObserveIntelligence();
-  const ensembleGrid = useEnsembleGrid();
-  const cameraState = useCameraState(viewer);
+    phase,
+    draft,
+    plan,
+    selectedRoute,
+    selectedRouteId,
+    isCalculating,
+    error,
+    updateDraft,
+    calculate,
+    selectRoute,
+    startNavigation,
+    backToPlanning,
+    backToSetup,
+  } = useMissionPlanner();
 
-  const handleViewerReady = useCallback((v: Viewer) => {
-    setViewer(v);
-  }, []);
-
-  const toggleLayer = useCallback((key: keyof LayerVisibility) => {
-    setLayerVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
-  }, []);
-
-  const handleLocate = useCallback(
-    (query: string) => {
-      if (!viewer) return;
-      const clean = query.trim().toUpperCase();
-      const normalized = clean.replace(/[\s\-_]/g, '');
-
-      // Check icebergs (from live observed set, fallback to ICEBERGS)
-      const allBergs = observedIcebergs.length > 0 ? observedIcebergs : ICEBERGS;
-      const berg = allBergs.find((b) => {
-        const bIdClean = b.id.toUpperCase().replace(/[\s\-_]/g, '');
-        const bNameClean = b.name.toUpperCase().replace(/[\s\-_]/g, '');
-        return (
-          bIdClean === normalized ||
-          bNameClean.includes(normalized) ||
-          b.id.toUpperCase() === clean ||
-          b.name.toUpperCase().includes(clean)
-        );
-      });
-
-      // Check vessels (from live observed set, fallback to VESSEL_ROUTES)
-      const allVessels = observedVessels.length > 0 ? observedVessels : VESSEL_ROUTES;
-      const vessel = allVessels.find((v) => {
-        const vIdClean = v.id.toUpperCase().replace(/[\s\-_]/g, '');
-        const vNameClean = v.name.toUpperCase().replace(/[\s\-_]/g, '');
-        return (
-          vIdClean === normalized ||
-          vNameClean.includes(normalized) ||
-          v.id.toUpperCase() === clean ||
-          v.name.toUpperCase().includes(clean)
-        );
-      });
-
-      const target = berg ?? vessel;
-      if (!target) return;
-
-      const isBerg = Boolean(berg);
-      let lon = 0;
-      let lat = 0;
-
-      if ('longitude' in target && 'latitude' in target) {
-        lon = target.longitude;
-        lat = target.latitude;
-      } else if ('track' in target) {
-        const pt = target.track[target.track.length - 1];
-        lon = pt[0];
-        lat = pt[1];
-      } else if ('waypoints' in target) {
-        const pt = target.waypoints[target.waypoints.length - 1];
-        lon = pt[0];
-        lat = pt[1];
-      }
-
-      viewer.camera.flyTo({
-        destination: Cartesian3.fromDegrees(lon, lat, 1200000),
-        orientation: { heading: CesiumMath.toRadians(0), pitch: CesiumMath.toRadians(-70), roll: 0 },
-        duration: 1.5,
-      });
-      setSelection({ kind: isBerg ? 'iceberg' : 'vessel', id: target.id });
-    },
-    [viewer, setSelection, observedIcebergs, observedVessels],
+  // Hazards follow the horizon the operator picked, so the map always shows
+  // the same state the routes were judged against.
+  const { seaIce, icebergPositions } = useMissionHazards(
+    plan?.horizon_hours ?? draft.horizonHours,
   );
 
-  const navigationDestinationName = navigationRoute
-    ? getCheckpointById(navigationRoute.checkpointId)?.name
-    : undefined;
+  const routeCoordinates = selectedRoute?.coordinates ?? null;
+
+  const [voyage, voyageControls] = useVoyageSimulation(
+    phase === 'navigating' ? (routeCoordinates as LonLat[] | null) : null,
+    selectedRoute?.eta_hours ?? 0,
+    phase === 'navigating',
+  );
+
+  useMissionCamera({
+    viewer,
+    phase,
+    routeCoordinates,
+    vesselPosition: voyage?.position ?? null,
+    vesselHeadingDeg: voyage?.bearingDeg ?? null,
+    followVessel,
+  });
+
+  const mission = getMission(draft.missionId);
+  const activeMission = plan
+    ? { origin: plan.origin_name, destination: plan.destination_name }
+    : { origin: mission.originName, destination: mission.destinationName };
+
+  const vesselName = plan?.vessel.name ?? vessels.find((v) => v.id === draft.vesselId)?.name ?? null;
+
+  // Route vertices already astern, for the covered-track trail.
+  const coveredPath = useMemo<LonLat[]>(() => {
+    if (!voyage || !routeCoordinates) return [];
+    const passed = routeCoordinates.slice(0, voyage.legIndex + 1) as LonLat[];
+    return [...passed, voyage.position];
+  }, [voyage, routeCoordinates]);
+
+  const handleEndNavigation = useCallback(() => {
+    voyageControls.reset();
+    setFollowVessel(true);
+    backToPlanning();
+  }, [voyageControls, backToPlanning]);
+
+  const handleStartNavigation = useCallback(() => {
+    setFollowVessel(true);
+    startNavigation();
+  }, [startNavigation]);
+
+  const showIce = phase !== 'setup' && Boolean(seaIce);
 
   return (
-    <div className="boreas-app-layout">
-      <GlobeContainer
-        onViewerReady={handleViewerReady}
-        layerVisibility={layerVisibility}
-        observedVessels={observedVessels}
-        observedIcebergs={observedIcebergs}
-        liveDrift={liveDrift}
-        liveRoutes={liveRoutes}
-        navigationOptions={navigationRoute?.options}
-        navigationSelectedIndex={navigationRoute?.selectedIndex}
-        navigationDestinationName={navigationDestinationName}
-        navigationVessel={navigationRoute?.vessel}
-        ensembleGrid={ensembleGrid}
+    <>
+      <MissionGlobe onViewerReady={setViewer}>
+        {(v) => (
+          <>
+            <SeaIceLayer
+              viewer={v}
+              visible={showIce}
+              grid={seaIce}
+              thresholds={
+                plan?.ice_thresholds ?? {
+                  passable_max: 0.3,
+                  caution_max: 0.6,
+                  restricted_max: 0.8,
+                }
+              }
+            />
+
+            {plan && (
+              <MissionRouteLayer
+                viewer={v}
+                routes={plan.routes}
+                selectedRouteId={selectedRouteId}
+                onSelectRoute={selectRoute}
+                originName={plan.origin_name}
+                destinationName={plan.destination_name}
+                focusSelectedOnly={phase === 'navigating'}
+              />
+            )}
+
+            {selectedRoute && (
+              <RouteHazardLayer
+                viewer={v}
+                visible={phase !== 'setup'}
+                relevantIcebergs={selectedRoute.iceberg_exposure.relevant_icebergs}
+                positions={icebergPositions}
+                focusedIcebergId={focusedIcebergId}
+              />
+            )}
+
+            {phase === 'navigating' && voyage && selectedRoute && (
+              <VesselNavLayer
+                viewer={v}
+                position={voyage.position}
+                headingDeg={voyage.bearingDeg}
+                vesselName={vesselName ?? 'Vessel'}
+                coveredPath={coveredPath}
+                nextWaypoint={
+                  (selectedRoute.coordinates[voyage.nextWaypointIndex] as LonLat) ?? null
+                }
+              />
+            )}
+          </>
+        )}
+      </MissionGlobe>
+
+      <MapLegend
+        phase={phase}
+        showIce={showIce}
+        hasHazards={Boolean(selectedRoute?.iceberg_exposure.relevant_icebergs.length)}
       />
 
-      <TopToolbar
-        activeTab={activeTab}
-        onSelectTab={setActiveTab}
-        backendState={backendState}
-        onLocate={handleLocate}
-        tileStripVisible={tileStripVisible}
-        onToggleTileStrip={() => setTileStripVisible((v) => !v)}
-        navigationRoute={navigationRoute}
-        onRouteChange={setNavigationRoute}
-      />
-
-      <ObserveHud
-        visibility={layerVisibility}
-        onToggle={toggleLayer}
-        viewer={viewer}
-        backendOnline={backendState === 'online'}
-        totalVessels={totalVesselCount}
-        activeVessels={activeVesselCount}
-        totalIcebergs={totalIcebergCount}
-        vesselsProvenance={vesselsProvenance}
-        icebergsProvenance={icebergsProvenance}
-        onOpenSatelliteModal={(sourceId) => {
-          const src = layerRegistry.find((s) => s.id === sourceId);
-          if (src) setInspectSatelliteSource(src);
-        }}
-      />
-
-      <RouteResultsPanel navigationRoute={navigationRoute} onRouteChange={setNavigationRoute} />
-
-      {inspectSatelliteSource && (
-        <TileModal
-          source={inspectSatelliteSource}
-          selectedDate={satelliteDate}
-          connected={isConnected(inspectSatelliteSource.id)}
-          notConnectedReason={reasonFor(inspectSatelliteSource.id)}
-          onDateChange={setSatelliteDate}
-          onClose={() => setInspectSatelliteSource(null)}
-          onSyncToGlobe={async (source) => {
-            if (source.id === 'sentinel-1' && !layerVisibility.sentinel1) {
-              toggleLayer('sentinel1');
-            } else if (source.id === 'sentinel-2' && !layerVisibility.sentinel2) {
-              toggleLayer('sentinel2');
-            }
-          }}
+      <div className="mission-shell">
+        <CommandBar
+          phase={phase}
+          originName={activeMission.origin}
+          destinationName={activeMission.destination}
+          vesselName={vesselName}
+          backendState={backendState}
+          horizonHours={plan?.horizon_hours ?? draft.horizonHours}
         />
-      )}
 
-      <FlyoutPanel
-        activeTab={activeTab}
-        onClose={() => setActiveTab('')}
-        layerVisibility={layerVisibility}
-        onToggleLayer={toggleLayer}
-        ensembleGrid={ensembleGrid}
-        viewer={viewer}
-      />
+        <div className="mission-body">
+          {/* Left column is deliberately empty so the globe reads through it;
+              panels sit on the right, where the Antarctic corridor does not. */}
+          <div />
 
-      <InspectorPanel
-        selection={selection}
-        onClear={() => setSelection(null)}
-        backendState={backendState}
-        observedVessels={observedVessels}
-        observedIcebergs={observedIcebergs}
-        liveDrift={liveDrift}
-        liveRoutes={liveRoutes}
-        boreasCoreOnline={boreasCoreOnline}
-      />
+          {/* On narrow screens the panel becomes a bottom sheet that can be
+              pulled down, because the map has to stay the primary surface
+              even when the viewport is small. The control is hidden at
+              desktop widths, where the panel sits beside the globe. */}
+          <div className={`panel-dock ${isSheetCollapsed ? 'collapsed' : ''}`}>
+            <button
+              type="button"
+              className="sheet-handle"
+              aria-expanded={!isSheetCollapsed}
+              onClick={() => setSheetCollapsed((c) => !c)}
+            >
+              <span className="sheet-handle-grip" />
+              <span className="sheet-handle-text">
+                {isSheetCollapsed ? 'Show details' : 'Hide details'}
+              </span>
+            </button>
 
-      <GlobeControls viewer={viewer} cameraState={cameraState} />
-      <StatusBar viewer={viewer} cameraState={cameraState} />
+          {phase === 'setup' && (
+            <MissionSetupPanel
+              draft={draft}
+              vessels={vessels}
+              isCalculating={isCalculating}
+              error={error}
+              backendOnline={backendState === 'online'}
+              onChange={updateDraft}
+              onCalculate={calculate}
+            />
+          )}
 
-      {/* Hidden by default -- revealed by hovering the thin hot-edge strip
-          at the very bottom of the screen, or by toggling "Satellite Data"
-          in the toolbar (.open class, persists regardless of hover). */}
-      <div className="tile-strip-hover-edge" />
-      <div className={`tile-strip-dock glass-panel ${tileStripVisible ? 'open' : ''}`}>
-        <SatelliteDataPanel viewer={viewer} />
+          {phase === 'planning' && plan && (
+            <RouteOptionsPanel
+              plan={plan}
+              selectedRouteId={selectedRouteId}
+              focusedIcebergId={focusedIcebergId}
+              onSelectRoute={selectRoute}
+              onFocusIceberg={setFocusedIcebergId}
+              onStartNavigation={handleStartNavigation}
+              onBack={backToSetup}
+            />
+          )}
+
+          {phase === 'navigating' && plan && selectedRoute && voyage && (
+            <NavigationPanel
+              route={selectedRoute}
+              voyage={voyage}
+              vesselName={vesselName ?? plan.vessel.name}
+              destinationName={plan.destination_name}
+              followVessel={followVessel}
+              onToggleFollow={() => setFollowVessel((f) => !f)}
+              onSetSpeed={voyageControls.setSpeedMultiplier}
+              onPause={voyageControls.pause}
+              onResume={voyageControls.start}
+              onEndNavigation={handleEndNavigation}
+            />
+          )}
+          </div>
+        </div>
       </div>
-    </div>
+
+      {isCalculating && (
+        <div className="calculating-overlay" role="status" aria-live="polite">
+          <div className="calculating">
+            <div className="sweep" />
+            <span className="calculating-text">
+              Searching the navigation domain&hellip;
+            </span>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

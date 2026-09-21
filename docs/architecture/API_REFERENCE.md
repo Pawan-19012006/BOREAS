@@ -20,6 +20,12 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
 | `POST` | `/fusion/demo` | Bayesian conjugate-Gaussian data fusion demo | None |
 | `GET` | `/observe/vessels` | Level 01 OBSERVE: Curated Antarctic vessel positions, headings, tracks, and statuses | None |
 | `GET` | `/observe/icebergs` | Level 01 OBSERVE: Tracked iceberg targets with dimensions, drift vectors, and risk levels | None |
+| `GET` | `/state/current` | Level 02 STATE: Unified current-state vector X(t) across fleet, hazards, ice, environment | None |
+| `GET` | `/forecast/icebergs` | Level 02 PREDICT: Kinematic trajectory forecast (+12h to +120h) with expanding uncertainty corridor | None |
+| `GET` | `/forecast/sea-ice` | Level 02 PREDICT: Deterministic spatial evolution of sea-ice concentration grid | None |
+| `GET` | `/forecast/environment` | Level 02 PREDICT: Synoptic polar weather forecast (wind, wave, temp, pressure, visibility) | None |
+| `GET` | `/forecast/state` | Level 02 FUTURE STATE: Unified future state X(t+h) combining all forecast engines | None |
+| `POST` | `/mission/plan` | Level 03 MISSION: three route alternatives Cape Town → Bharati/Maitri judged on the forecast state at a horizon | None |
 
 ---
 
@@ -369,3 +375,233 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
     ```
 - **Implementation File**: `boreas_core/api/server.py:496`
 - **Dependencies**: `boreas_core.fusion.indian_data.IndianDataFusionLayer`
+
+---
+
+## Level 02: State & Forecast APIs
+
+### 11. Unified Current State X(t)
+- **Status**: `CURRENT` / `PROTOTYPE`
+- **Method**: `GET`
+- **Path**: `/state/current`
+- **Purpose**: Serves canonical multi-domain current state vector X(t) composed from observation services (vessels, icebergs, sea-ice status, meteorological forcing, ocean currents, bathymetry, and data quality provenance).
+- **Request**: None
+- **Response**:
+  - Status: `200 OK`
+  - Schema (`CurrentState`):
+    ```json
+    {
+      "timestamp": "2026-09-19T12:00:00Z",
+      "vessels": [...],
+      "icebergs": [...],
+      "sea_ice": {
+        "mean_concentration_pct": 68.5,
+        "max_concentration_pct": 98.4,
+        "regional_status": "CONSOLIDATED PACK & COASTAL FAST ICE",
+        "fast_ice_extent_km2": 42500.0,
+        "provenance": "DERIVED — OSI-SAF / SYNTHETIC ENSEMBLE COMPOSITE"
+      },
+      "ocean": {
+        "surface_current_speed_ms": 0.28,
+        "surface_current_heading_deg": 284.0,
+        "sea_surface_temp_c": -1.6,
+        "provenance": "SIMULATED — SOUTHERN OCEAN CLIMATOLOGICAL BASELINE"
+      },
+      "weather": {
+        "wind_speed_kt": 18.0,
+        "wind_direction_deg": 235.0,
+        "air_temp_c": -14.5,
+        "wave_height_m": 2.8,
+        "pressure_hpa": 988.0,
+        "visibility_nm": 11.5,
+        "provenance": "SIMULATED — POLAR SYNOPTIC METEOROLOGY"
+      },
+      "bathymetry": {
+        "status": "NOMINAL",
+        "min_depth_m": 420.0,
+        "soundings_available": false,
+        "provenance": "PLANNED — IBCSO V2 DIGITAL BATHYMETRIC MODEL"
+      },
+      "quality": {
+        "overall_quality": 0.88,
+        "ais_provenance": "PROTOTYPE",
+        "iceberg_provenance": "DERIVED",
+        "satellite_provenance": "REAL",
+        "sea_ice_provenance": "DERIVED",
+        "ocean_provenance": "SIMULATED",
+        "weather_provenance": "SIMULATED",
+        "bathymetry_provenance": "PLANNED"
+      },
+      "uncertainty_index": 0.12,
+      "provenance_summary": { ... }
+    }
+    ```
+- **Implementation File**: `boreas_core/state/service.py`
+
+---
+
+### 12. Iceberg Trajectory Forecast
+- **Status**: `PROTOTYPE` (Deterministic Kinematic Model)
+- **Method**: `GET`
+- **Path**: `/forecast/icebergs`
+- **Query Parameters**:
+  - `horizon_hours` (optional `int`, e.g. 12, 24, 48, 72, 96, 120)
+- **Purpose**: Generates deterministic iceberg trajectory predictions across horizons (+12h to +120h) with spatially coherent drift, Coriolis turning, and non-linearly expanding uncertainty corridors:
+  $$r(h) = r_0 + \alpha \cdot h^{1.14}$$
+- **Response**:
+  - Status: `200 OK`
+  - Schema (`list[IcebergForecast]`):
+    ```json
+    [
+      {
+        "iceberg_id": "B-17",
+        "iceberg_name": "Iceberg B-17 (Weddell Sea)",
+        "current_position": [-35.0, -64.0],
+        "forecast_points": [
+          {
+            "horizon_hours": 12,
+            "timestamp": "2026-09-20T00:00:00Z",
+            "latitude": -64.04,
+            "longitude": -35.12,
+            "drift_speed_kt": 0.82,
+            "heading_deg": 284.5,
+            "confidence": 0.91,
+            "uncertainty_radius_km": 4.2
+          },
+          {
+            "horizon_hours": 120,
+            "timestamp": "2026-09-24T12:00:00Z",
+            "latitude": -64.42,
+            "longitude": -36.21,
+            "drift_speed_kt": 0.85,
+            "heading_deg": 288.0,
+            "confidence": 0.65,
+            "uncertainty_radius_km": 36.8
+          }
+        ],
+        "heading": 285.0,
+        "drift_speed": 0.8,
+        "provenance": "DETERMINISTIC_PROTOTYPE — KINEMATIC DRIFT FORECAST"
+      }
+    ]
+    ```
+- **Implementation File**: `boreas_core/forecast/iceberg.py`
+
+---
+
+### 13. Sea-Ice Concentration Forecast
+- **Status**: `PROTOTYPE` (Deterministic Spatial Evolution)
+- **Method**: `GET`
+- **Path**: `/forecast/sea-ice`
+- **Query Parameters**:
+  - `horizon_hours` (optional `int`, default 24)
+- **Purpose**: Simulates deterministic sea-ice advection, pack consolidation, and edge thermodynamics across the polar 32x32 grid. Provides a clean pluggable interface for future Fourier Neural Operator (FNO) or NEMO/SI3 ingestion.
+- **Response**:
+  - Status: `200 OK`
+  - Schema (`SeaIceForecastResponse`):
+    ```json
+    {
+      "horizon_hours": 48,
+      "timestamp": "2026-09-21T12:00:00Z",
+      "grid_lat": [-90.0, ..., -45.0],
+      "grid_lon": [-180.0, ..., 180.0],
+      "sic_values": [[...], ...],
+      "mean_concentration_pct": 72.4,
+      "max_concentration_pct": 98.2,
+      "confidence": 0.84,
+      "provenance": "PROTOTYPE — DETERMINISTIC SPATIAL EVOLUTION"
+    }
+    ```
+- **Implementation File**: `boreas_core/forecast/sea_ice.py`
+
+---
+
+### 14. Environmental & Weather Forecast
+- **Status**: `SIMULATED` (Polar Synoptic Dynamics)
+- **Method**: `GET`
+- **Path**: `/forecast/environment`
+- **Purpose**: Generates multi-horizon synoptic meteorology (wind speed, wind direction, wave height, air temperature, surface water temperature, barometric pressure, visibility) based on sub-polar low pressure wave dynamics.
+- **Response**:
+  - Status: `200 OK`
+  - Schema (`EnvironmentalForecastResponse`):
+    ```json
+    {
+      "forecasts": [
+        {
+          "horizon_hours": 12,
+          "timestamp": "2026-09-20T00:00:00Z",
+          "wind_speed_kt": 18.5,
+          "wind_direction_deg": 236.2,
+          "wave_height_m": 2.8,
+          "air_temp_c": -14.6,
+          "surface_temp_c": -1.6,
+          "pressure_hpa": 987.2,
+          "visibility_nm": 11.2,
+          "confidence": 0.93,
+          "provenance": "SIMULATED SYNOPTIC POLAR FORECAST"
+        }
+      ],
+      "current": { ... },
+      "provenance": "SIMULATED SYNOPTIC POLAR FORECAST"
+    }
+    ```
+- **Implementation File**: `boreas_core/forecast/environment.py`
+
+---
+
+### 15. Unified Future State X(t+h)
+- **Status**: `PROTOTYPE` / `SIMULATED`
+- **Method**: `GET`
+- **Path**: `/forecast/state`
+- **Query Parameters**:
+  - `horizon_hours` (required `int`, e.g. 12, 24, 48, 72, 96, 120)
+- **Purpose**: Canonical prediction endpoint that fuses forecasted sea ice, predicted iceberg positions with uncertainty envelopes, environmental conditions, and projected vessel positions. Primary interface input for Level 03 Risk Evaluation.
+- **Response**:
+  - Status: `200 OK`
+  - Schema (`FutureStateResponse`):
+    ```json
+    {
+      "horizon_hours": 48,
+      "timestamp": "2026-09-21T12:00:00Z",
+      "vessels": [ ... ],
+      "icebergs": [ ... ],
+      "sea_ice": { ... },
+      "environment": { ... },
+      "overall_confidence": 0.84,
+      "provenance": {
+        "vessels": "PROTOTYPE AIS — ESTIMATED TRANSIT",
+        "icebergs": "DETERMINISTIC_PROTOTYPE — KINEMATIC DRIFT FORECAST",
+        "sea_ice": "PROTOTYPE — DETERMINISTIC SPATIAL EVOLUTION",
+        "environment": "SIMULATED SYNOPTIC POLAR FORECAST"
+      }
+    }
+    ```
+- **Implementation File**: `boreas_core/forecast/service.py`
+
+---
+
+## Level 03: Mission Planning API
+
+### 16. Mission Route Planning
+- **Status**: `PROTOTYPE` (deterministic A*; not validated)
+- **Method**: `POST`
+- **Path**: `/mission/plan`
+- **Request** (`MissionPlanRequest`):
+  ```json
+  {
+    "mission_id": "CAPE_TOWN_TO_BHARATI",
+    "vessel_id": "vasiliy_golovnin",
+    "horizon_hours": 48,
+    "weights": { "risk": 0.8, "fuel": 0.5, "eta": 0.4 },
+    "ice_thresholds": { "passable_max": 0.30, "caution_max": 0.60, "restricted_max": 0.80 }
+  }
+  ```
+  - `mission_id`: `CAPE_TOWN_TO_BHARATI` | `CAPE_TOWN_TO_MAITRI`.
+  - `vessel_id` (optional): an id from `/observe/vessels`; defaults per mission (Golovnin → Bharati, Papanin → Maitri). Its `ice_class` selects the constraint profile (cruise speed, base fuel t/km, ice risk/resistance scale).
+  - `horizon_hours`: `0, 12, 24, 48, 72, 96, 120`. The forecast hazard state (sea ice, iceberg positions + uncertainty, environment) at T+horizon is applied to the whole transit.
+  - `weights` (optional): non-negative, normalised server-side; drive the RECOMMENDED pick.
+  - `ice_thresholds` (optional): SIC bounds for PASSABLE/CAUTION/RESTRICTED (above → IMPASSABLE).
+- **Response** (`MissionPlanResponse`): `mission_id`, `mission_label`, `vessel`, `horizon_hours`, normalised `weights`, `ice_thresholds`, `domain` (bounds, resolution, origin/destination snap km), `warnings`, and `routes` — always three, ordered `recommended`, `low_risk`, `fast_fuel`. Each route (`RoutePlan`):
+  `route_id`, `label`, `coordinates` (`[lon, lat]`, exact origin → exact destination), `distance_km`, `eta_hours`, `estimated_fuel` (`tonnes`, `label: "PROTOTYPE ESTIMATE"`, `consumption_t_per_km`, `environmental_multiplier`), `risk_score` (0–1) + `risk_level`, `confidence`, `sea_ice_exposure` (mean/max SIC, passable/caution/restricted/impassable %, `ice_exposure_km`, `assessment`), `iceberg_exposure` (counts + `relevant_icebergs` classified INTERSECTING/POTENTIAL/NEARBY with distance, exclusion radius, closest-approach ETA), `weather_exposure`, `primary_risk_driver` (+ `risk_driver_shares`), `explanation` (strings built from the route's own metrics), `search_weights`, `generation`, `candidates_evaluated`, `provenance`.
+- **Errors**: `422` invalid mission/horizon/weights/thresholds or no route; `404` unknown `vessel_id`.
+- **Implementation Files**: `boreas_core/mission/` (`planner.py`, `fields.py`, `config.py`, `models.py`), route handler in `api/server.py`.

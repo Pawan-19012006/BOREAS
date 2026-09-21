@@ -1,0 +1,1260 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@400;500;600&display=swap');
+
+/* ===========================================================================
+   BOREAS mission control — visual system
+
+   Grounded in bridge instrumentation and Admiralty chart convention, not
+   sci-fi HUD. Three rules drive everything here:
+
+   1. Ice is the subject, so ice is the only thing allowed to be bright.
+   2. The recommended course is signal amber, the traditional bridge
+      instrument colour and the one hue that survives on top of pack ice.
+   3. Red means one thing only: a hazard that intersects the track.
+
+   The globe is the product. Chrome sits on it in a narrow value range so it
+   never competes with the map.
+   =========================================================================== */
+
+:root {
+  /* Southern Ocean at night: cold, desaturated, very dark. */
+  --sea-900: #04090f;
+  --sea-850: #071119;
+  --sea-800: #0a1722;
+  --sea-700: #10202e;
+  --sea-600: #17303f;
+  --sea-500: #22475c;
+
+  /* Chrome surfaces. Opaque, not glass: readability over a moving map. */
+  --surface: rgba(7, 17, 25, 0.94);
+  --surface-raised: rgba(12, 26, 37, 0.96);
+  --surface-sunken: rgba(4, 9, 15, 0.88);
+  --hairline: rgba(143, 180, 206, 0.16);
+  --hairline-strong: rgba(143, 180, 206, 0.3);
+
+  /* Type. Near-white with a cold cast, matching the ice. */
+  --ink: #eaf2f7;
+  --ink-muted: #93aabb;
+  --ink-dim: #61788a;
+
+  /* Signal colours. */
+  --signal: #ffb300; /* recommended course, primary action */
+  --signal-dim: #b87f00;
+  --ice: #8fd4e8; /* sea ice, informational */
+  --go: #5ce1a6; /* origin, covered track, favourable */
+  --caution: #e8d48f;
+  --restricted: #e8a05c;
+  --danger: #d9614e; /* reserved: impassable ice, intersecting berg */
+  --steel: #8ea6bd; /* route alternates */
+
+  /* Typography */
+  --font-ui: 'Barlow', system-ui, -apple-system, sans-serif;
+  --font-condensed: 'Barlow Condensed', 'Barlow', system-ui, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Dense by intent: this is an instrument panel, not a marketing page. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius: 3px;
+  --radius-lg: 5px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 380ms;
+
+  --panel-w: 384px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================ Globe ============================ */
+
+/* The globe is the base layer of the whole product, not a panel within it. */
+.globe-root {
+  position: fixed;
+  inset: 0;
+  background: var(--sea-900);
+}
+
+.globe-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+/* Cesium's own chrome, toned down to sit under this product's chrome.
+   Attribution stays visible: it is a licence requirement, not decoration. */
+.globe-canvas .cesium-widget-credits {
+  font-family: var(--font-ui) !important;
+  font-size: 10px !important;
+  color: var(--ink-dim) !important;
+  position: fixed !important;
+  right: var(--space-4) !important;
+  bottom: 6px !important;
+  left: auto !important;
+  max-width: 320px;
+  text-align: right;
+}
+
+.globe-canvas .cesium-widget-credits a {
+  color: var(--ink-dim) !important;
+}
+
+/* ============================ Shell ============================ */
+
+.mission-shell {
+  position: fixed;
+  inset: 0;
+  font-family: var(--font-ui);
+  color: var(--ink);
+  /* The shell is a pass-through frame; only its children take pointer events,
+     so the globe stays draggable everywhere they aren't. */
+  pointer-events: none;
+  display: grid;
+  /* minmax(0, 1fr) rather than the default: a grid track is otherwise sized to
+     its widest item's min-content, so a crowded command bar would stretch the
+     whole column past the viewport and take every panel with it. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+}
+
+.mission-shell > * {
+  pointer-events: auto;
+  min-width: 0;
+}
+
+.mission-body {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  min-height: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.mission-body > * {
+  pointer-events: auto;
+}
+
+/* ============================ Command bar ============================ */
+
+.command-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: 0 var(--space-4);
+  height: 52px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+  backdrop-filter: blur(8px);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.command-brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.command-brand-mark {
+  font-family: var(--font-condensed);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.command-brand-sub {
+  font-family: var(--font-condensed);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.command-route {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-condensed);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.command-route-leg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-route-arrow {
+  color: var(--signal);
+  flex-shrink: 0;
+}
+
+.command-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.command-readouts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.15;
+}
+
+.readout-label {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.readout-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-condensed);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-dim);
+  flex-shrink: 0;
+}
+
+.status-dot[data-state='online'] {
+  background: var(--go);
+  box-shadow: 0 0 0 3px rgba(92, 225, 166, 0.16);
+}
+
+.status-dot[data-state='offline'] {
+  background: var(--danger);
+}
+
+.status-dot[data-state='checking'] {
+  background: var(--caution);
+}
+
+/* ============================ Panels ============================ */
+
+.panel {
+  width: var(--panel-w);
+  max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.panel-title {
+  font-family: var(--font-condensed);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.panel-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  flex: 1;
+}
+
+.panel-section {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.panel-section:last-child {
+  border-bottom: none;
+}
+
+.panel-footer {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--hairline);
+  background: var(--surface-sunken);
+  flex-shrink: 0;
+}
+
+.section-label {
+  font-family: var(--font-condensed);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  margin: 0 0 var(--space-3);
+}
+
+/* ============================ Form controls ============================ */
+
+.field {
+  display: block;
+  margin-bottom: var(--space-4);
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+.field-label {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  margin-bottom: var(--space-2);
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin: var(--space-2) 0 0;
+  line-height: 1.45;
+}
+
+.select,
+.input {
+  width: 100%;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  min-height: 40px;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.select:hover,
+.input:hover {
+  border-color: rgba(143, 180, 206, 0.45);
+}
+
+.select:focus-visible,
+.input:focus-visible,
+button:focus-visible,
+[role='button']:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-muted) 50%),
+    linear-gradient(135deg, var(--ink-muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 17px, calc(100% - 12px) 17px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+.select option {
+  background: var(--sea-800);
+  color: var(--ink);
+}
+
+/* Segmented control — used for forecast horizon */
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.segmented-option {
+  flex: 1 0 auto;
+  min-width: 44px;
+  min-height: 34px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.segmented-option:hover {
+  background: rgba(143, 180, 206, 0.1);
+  color: var(--ink);
+}
+
+.segmented-option[aria-pressed='true'] {
+  background: var(--signal);
+  color: #1a1205;
+  font-weight: 500;
+}
+
+/* Weight sliders */
+.weight-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 34px;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.weight-row:last-child {
+  margin-bottom: 0;
+}
+
+.weight-name {
+  font-family: var(--font-condensed);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.weight-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: right;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  background: var(--sea-600);
+  border-radius: 2px;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--signal);
+  border: 2px solid var(--sea-900);
+}
+
+input[type='range']::-moz-range-track {
+  height: 3px;
+  background: var(--sea-600);
+  border-radius: 2px;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--signal);
+  border: 2px solid var(--sea-900);
+}
+
+/* ============================ Buttons ============================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: var(--font-condensed);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.btn-primary {
+  width: 100%;
+  background: var(--signal);
+  color: #1a1205;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #ffc633;
+}
+
+.btn-primary:disabled {
+  background: var(--sea-600);
+  color: var(--ink-dim);
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--hairline-strong);
+  color: var(--ink-muted);
+}
+
+.btn-ghost:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.btn-sm {
+  min-height: 34px;
+  font-size: 13px;
+  padding: 0 var(--space-3);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.icon-btn:hover {
+  background: rgba(143, 180, 206, 0.12);
+  color: var(--ink);
+}
+
+/* ============================ Route cards ============================ */
+
+.route-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.route-card {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--steel);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.route-card:hover {
+  background: rgba(23, 48, 63, 0.5);
+  border-color: var(--hairline-strong);
+}
+
+.route-card[data-selected='true'] {
+  border-color: var(--hairline-strong);
+  border-left-color: var(--signal);
+  background: rgba(255, 179, 0, 0.07);
+}
+
+.route-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.route-card-name {
+  font-family: var(--font-condensed);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ink);
+}
+
+.route-card[data-selected='true'] .route-card-name {
+  color: var(--signal);
+}
+
+.tag {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.tag-recommended {
+  background: var(--signal);
+  color: #1a1205;
+}
+
+/* Metric grid inside a route card */
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.metric {
+  min-width: 0;
+}
+
+.metric-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.metric-unit {
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin-left: 2px;
+}
+
+.metric-label {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+  margin-top: 1px;
+}
+
+.route-card-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+  color: var(--ink-muted);
+  flex-wrap: wrap;
+}
+
+/* Risk chips carry a shape cue as well as colour, so they don't rely on hue
+   alone to communicate severity. */
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-condensed);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.risk-chip[data-level='VERY LOW'],
+.risk-chip[data-level='LOW'] {
+  color: var(--go);
+}
+
+.risk-chip[data-level='MEDIUM'] {
+  color: var(--caution);
+}
+
+.risk-chip[data-level='HIGH'] {
+  color: var(--restricted);
+}
+
+.risk-chip[data-level='CRITICAL'] {
+  color: var(--danger);
+}
+
+/* ============================ Ice exposure bar ============================ */
+
+.ice-bar {
+  display: flex;
+  height: 9px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--sea-700);
+  margin-bottom: var(--space-2);
+}
+
+.ice-bar-seg {
+  transition: flex-grow var(--dur) var(--ease);
+  min-width: 0;
+}
+
+.ice-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.ice-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ============================ Data rows ============================ */
+
+.data-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 5px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(143, 180, 206, 0.07);
+}
+
+.data-row:last-child {
+  border-bottom: none;
+}
+
+.data-row dt {
+  color: var(--ink-muted);
+  min-width: 0;
+}
+
+.data-row dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ============================ Hazard list ============================ */
+
+.hazard-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.hazard-item:hover {
+  background: rgba(143, 180, 206, 0.09);
+}
+
+.hazard-item[data-focused='true'] {
+  background: rgba(143, 180, 206, 0.13);
+  border-color: var(--hairline-strong);
+}
+
+.hazard-marker {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.hazard-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.hazard-meta {
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin-top: 1px;
+}
+
+.hazard-distance {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+/* ============================ Explanation ============================ */
+
+.explain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.explain-item {
+  position: relative;
+  padding-left: var(--space-4);
+  margin-bottom: var(--space-3);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 62ch;
+}
+
+.explain-item:last-child {
+  margin-bottom: 0;
+}
+
+.explain-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 6px;
+  height: 1px;
+  background: var(--signal);
+}
+
+/* ============================ Navigation HUD ============================ */
+
+.nav-hud {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: 1px;
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.nav-cell {
+  background: var(--surface-raised);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+
+.nav-cell-label {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  margin-bottom: 3px;
+}
+
+.nav-cell-value {
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-cell-value[data-accent='signal'] {
+  color: var(--signal);
+}
+
+.nav-cell-sub {
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+/* Progress along the route */
+.progress-track {
+  position: relative;
+  height: 4px;
+  background: var(--sea-700);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--go);
+  transition: width var(--dur) linear;
+}
+
+/* ============================ Notices ============================ */
+
+.notice {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid;
+}
+
+.notice-warn {
+  color: var(--caution);
+  border-color: rgba(232, 212, 143, 0.35);
+  background: rgba(232, 212, 143, 0.07);
+}
+
+.notice-error {
+  color: var(--danger);
+  border-color: rgba(217, 97, 78, 0.4);
+  background: rgba(217, 97, 78, 0.08);
+}
+
+.notice-info {
+  color: var(--ink-muted);
+  border-color: var(--hairline);
+  background: var(--surface-sunken);
+}
+
+/* Provenance — the honesty contract made visible, never hidden in a tooltip */
+.provenance {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  letter-spacing: 0.01em;
+}
+
+.sim-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--caution);
+  border: 1px solid rgba(232, 212, 143, 0.4);
+  border-radius: 2px;
+  padding: 1px 6px;
+}
+
+/* ============================ Loading ============================ */
+
+/* Sits over the globe while the backend searches, so the wait has a home
+   rather than leaving the button in an indefinite disabled state. */
+.calculating-overlay {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  min-width: 264px;
+}
+
+.calculating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-4);
+  text-align: center;
+}
+
+/* A sweep, not a spinner: it reads as a radar sweep over the search domain,
+   which is what the backend is actually doing. */
+.sweep {
+  width: 100%;
+  max-width: 200px;
+  height: 2px;
+  background: var(--sea-700);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--signal), transparent);
+  animation: sweep 1.15s var(--ease) infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+
+.calculating-text {
+  font-family: var(--font-condensed);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+/* ============================ Map legend ============================ */
+
+.map-legend {
+  position: absolute;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  max-width: 210px;
+}
+
+.legend-title {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  margin-bottom: var(--space-2);
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+
+.legend-row:last-child {
+  margin-bottom: 0;
+}
+
+.legend-line {
+  width: 18px;
+  height: 0;
+  border-top-width: 3px;
+  border-top-style: solid;
+  flex-shrink: 0;
+}
+
+/* ===================== Panel dock / bottom sheet ===================== */
+
+/* At desktop widths the dock is a transparent wrapper: the panel inside keeps
+   its own width and the handle is not rendered. */
+.panel-dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: var(--panel-w);
+  max-width: 100%;
+}
+
+.sheet-handle {
+  display: none;
+}
+
+/* ============================ Responsive ============================ */
+
+/* Tablet and below: panels become a bottom sheet so the map keeps the
+   full width of the screen. */
+@media (max-width: 900px) {
+  :root {
+    --panel-w: 100%;
+  }
+
+  .mission-shell {
+    grid-template-rows: auto 1fr;
+  }
+
+  .mission-body {
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 0;
+    gap: 0;
+  }
+
+  .panel {
+    width: 100%;
+    max-height: 52vh;
+    border-radius: 0;
+    border-bottom: none;
+    border-left: none;
+    border-right: none;
+  }
+
+  .panel-dock {
+    width: 100%;
+    background: var(--surface);
+    border-top: 1px solid var(--hairline);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    overflow: hidden;
+  }
+
+  /* The sheet can be pulled down so the globe -- still the primary surface at
+     this width -- is not permanently half-covered. */
+  .sheet-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 34px;
+    padding: var(--space-2);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .sheet-handle-grip {
+    width: 30px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--hairline-strong);
+  }
+
+  .sheet-handle-text {
+    font-family: var(--font-condensed);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--ink-dim);
+  }
+
+  .panel-dock.collapsed .panel-scroll,
+  .panel-dock.collapsed .panel-header {
+    display: none;
+  }
+
+  /* The primary action stays reachable while collapsed -- the whole point of
+     collapsing is to look at the map and then act on it. */
+  .panel-dock.collapsed .panel {
+    max-height: none;
+    border-top: 1px solid var(--hairline);
+  }
+
+  .command-bar {
+    gap: var(--space-3);
+    padding: 0 var(--space-3);
+  }
+
+  .command-readouts {
+    gap: var(--space-3);
+  }
+
+  /* Redundant once the panel is a sheet: its header names the phase. */
+  .command-phase {
+    display: none;
+  }
+
+  .map-legend {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .command-brand-sub,
+  .command-route,
+  /* The vessel is named in the panel footer; no room for it here. */
+  .command-vessel {
+    display: none;
+  }
+
+  .panel {
+    max-height: 58vh;
+  }
+
+  .nav-cell-value {
+    font-size: 17px;
+  }
+
+  /* Three metric columns get too tight below this width. */
+  .metric-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-3) var(--space-2);
+  }
+}

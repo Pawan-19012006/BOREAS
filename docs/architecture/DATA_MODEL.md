@@ -215,3 +215,44 @@ FEATURE_COLUMNS = [
   - `ensemble_std`: Epistemic standard deviation $(N, T, C, H, W)$.
 - **VesselAPI JSON**:
   - Fields: `imo`, `latitude`, `longitude`, `timestamp`, `speed`, `heading`.
+
+---
+
+## 5. Level 02: Unified State & Prediction Models
+
+### 5.1 Current State Models (`boreas_core/state/models.py`)
+- **`CurrentState`**:
+  - `timestamp: str`: ISO 8601 UTC analysis epoch.
+  - `vessels: list[ObservedVessel]`: Active vessels with positions, headings, speeds, statuses (`REAL` / `PROTOTYPE`).
+  - `icebergs: list[ObservedIceberg]`: Tracked icebergs with dimensions, risk levels, drift vectors (`DERIVED`).
+  - `sea_ice: SeaIceCurrentState`: Regional mean & max concentration, regime status (`DERIVED`).
+  - `ocean: OceanCurrentState`: Surface currents and sea surface temperatures (`SIMULATED`).
+  - `weather: WeatherCurrentState`: 10m wind, waves, air temperature, pressure, visibility (`SIMULATED`).
+  - `bathymetry: BathymetryState`: Seafloor depth minima, soundings status (`PLANNED`).
+  - `quality: DataQualityState`: Per-source provenance labels (`REAL`, `DERIVED`, `PROTOTYPE`, `SIMULATED`, `PLANNED`) and composite quality score $[0.0, 1.0]$.
+  - `uncertainty_index: float`: Normalized epistemic uncertainty index.
+
+### 5.2 Forecast Engine Models (`boreas_core/forecast/models.py`)
+- **`IcebergForecastPoint`**:
+  - `horizon_hours: int`: Lead horizon ($+12, +24, +48, +72, +96, +120$ hours).
+  - `latitude: float`, `longitude: float`: Predicted geographic position.
+  - `drift_speed_kt: float`, `heading_deg: float`: Velocity vector.
+  - `confidence: float`: Horizon-decayed model confidence score ($0.94 \to 0.65$).
+  - `uncertainty_radius_km: float`: Non-linear positional uncertainty envelope $r(h) = r_0 + \alpha \cdot h^{1.14}$.
+- **`IcebergForecast`**:
+  - `iceberg_id: str`, `iceberg_name: str`, `current_position: list[float]`.
+  - `forecast_points: list[IcebergForecastPoint]`.
+  - `provenance: str` = `"DETERMINISTIC_PROTOTYPE — KINEMATIC DRIFT FORECAST"`.
+- **`SeaIceForecastResponse`**:
+  - `horizon_hours: int`, `timestamp: str`.
+  - `grid_lat: list[float]`, `grid_lon: list[float]`, `sic_values: list[list[float]]`: 2D concentration matrix on 32x32 polar grid.
+  - `mean_concentration_pct: float`, `max_concentration_pct: float`.
+  - `confidence: float`.
+  - `provenance: str` = `"PROTOTYPE — DETERMINISTIC SPATIAL EVOLUTION"`.
+- **`EnvironmentalForecastPoint`**:
+  - `horizon_hours: int`, `timestamp: str`, `wind_speed_kt: float`, `wind_direction_deg: float`, `wave_height_m: float`, `air_temp_c: float`, `surface_temp_c: float`, `pressure_hpa: float`, `visibility_nm: float`, `confidence: float`.
+  - `provenance: str` = `"SIMULATED SYNOPTIC POLAR FORECAST"`.
+- **`FutureStateResponse`**:
+  - Primary interface object for Level 03 Risk Evaluation.
+  - Fuses `vessels`, `icebergs`, `sea_ice`, `environment` at lead horizon $T+h$ with overall confidence score and per-domain provenance disclosures.
+
