@@ -4,7 +4,7 @@
 // returned, then take the chosen one and get under way. The globe is mounted
 // once and persists across all three; only the overlay and the camera change.
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Viewer } from 'cesium';
 
 import MissionGlobe from './components/mission/MissionGlobe';
@@ -13,16 +13,24 @@ import MissionSetupPanel from './components/mission/MissionSetupPanel';
 import RouteOptionsPanel from './components/mission/RouteOptionsPanel';
 import NavigationPanel from './components/mission/NavigationPanel';
 import MapLegend from './components/mission/MapLegend';
+import MapLayerControls from './components/mission/MapLayerControls';
+import IcebergInspector from './components/mission/IcebergInspector';
+import { ForecastTimeline } from './components/ForecastTimeline';
 
 import MissionRouteLayer from './layers/MissionRouteLayer';
 import SeaIceLayer from './layers/SeaIceLayer';
 import RouteHazardLayer from './layers/RouteHazardLayer';
 import VesselNavLayer from './layers/VesselNavLayer';
+import IcebergLayer from './layers/IcebergLayer';
+import SatelliteImageryLayer from './layers/SatelliteImageryLayer';
 
 import { useMissionPlanner } from './hooks/useMissionPlanner';
 import { useMissionHazards } from './hooks/useMissionHazards';
 import { useMissionCamera } from './hooks/useMissionCamera';
 import { useObserveIntelligence } from './hooks/useObserveIntelligence';
+import { useForecastState } from './hooks/useForecastState';
+import { useSelectedEntity } from './hooks/useSelectedEntity';
+import { useSatelliteStatus } from './hooks/useSatelliteStatus';
 import { useBackendStatus } from './services/backendStatus';
 import { useVoyageSimulation } from './simulation/voyageSimulation';
 import { getMission } from './services/missionApi';
@@ -31,15 +39,52 @@ import type { LonLat } from './lib/geo';
 import './index.css';
 import './styles/mission.css';
 
+/** Which existing Cesium layers are currently shown -- driven by the
+ *  Google-Maps-style pills in MapLayerControls. Each key maps 1:1 to an
+ *  already-built layer component; nothing here renders anything itself. */
+export interface LayerVisibility {
+  routes: boolean;
+  icebergs: boolean;
+  seaIce: boolean;
+  satellite: boolean;
+}
+
+const DEFAULT_LAYER_VISIBILITY: LayerVisibility = {
+  routes: true,
+  icebergs: true,
+  seaIce: true,
+  // Off by default: enabling it makes a real CDSE fetch, and the honesty
+  // contract means it should be an explicit operator action, not a surprise
+  // blank/slow layer on load if credentials aren't configured.
+  satellite: false,
+};
+
 function App() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [focusedIcebergId, setFocusedIcebergId] = useState<string | null>(null);
   const [followVessel, setFollowVessel] = useState(true);
   // Only has an effect at bottom-sheet widths; see .panel-dock in mission.css.
   const [isSheetCollapsed, setSheetCollapsed] = useState(false);
+  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYER_VISIBILITY);
+  // Drives the map's hazard state (sea ice raster + iceberg positions) and the
+  // forecast timeline. Reset to the plan's own horizon whenever a new plan
+  // arrives (see effect below); the operator can then scrub it further to
+  // preview how conditions evolve without needing to replan.
+  const [selectedHorizon, setSelectedHorizon] = useState(0);
+
+  const toggleLayer = useCallback((key: keyof LayerVisibility) => {
+    setLayerVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
 
   const { state: backendState } = useBackendStatus();
-  const { vessels } = useObserveIntelligence();
+  const { vessels, icebergs: observedIcebergs } = useObserveIntelligence();
+  // Full +12h..+120h trajectory per iceberg, fetched once -- feeds the
+  // ICEBERGS layer's historical/predicted polylines and the inspector.
+  // Its own selectedHorizon/futureState fields are unused here; the map's
+  // horizon is driven by the shared `selectedHorizon` state above instead.
+  const { icebergForecasts } = useForecastState();
+  const { isConnected: isSatelliteConnected } = useSatelliteStatus();
+  const [selection, setSelection] = useSelectedEntity(viewer);
 
   const {
     phase,
@@ -59,9 +104,14 @@ function App() {
 
   // Hazards follow the horizon the operator picked, so the map always shows
   // the same state the routes were judged against.
-  const { seaIce, icebergPositions } = useMissionHazards(
-    plan?.horizon_hours ?? draft.horizonHours,
-  );
+  const { seaIce, icebergPositions, isLoading: isHazardLoading } = useMissionHazards(selectedHorizon);
+
+  // A freshly-computed plan resets the scrubber to the horizon it was judged
+  // against; from there the operator can advance the timeline to preview how
+  // conditions evolve without triggering a replan.
+  useEffect(() => {
+    if (plan) setSelectedHorizon(plan.horizon_hours);
+  }, [plan]);
 
   const routeCoordinates = selectedRoute?.coordinates ?? null;
 
@@ -105,7 +155,8 @@ function App() {
     startNavigation();
   }, [startNavigation]);
 
-  const showIce = phase !== 'setup' && Boolean(seaIce);
+  const showIce = layerVisibility.seaIce && phase !== 'setup' && Boolean(seaIce);
+  const showIcebergs = layerVisibility.icebergs && phase !== 'setup';
 
   return (
     <>
@@ -125,7 +176,13 @@ function App() {
               }
             />
 
-            {plan && (
+            <SatelliteImageryLayer
+              viewer={v}
+              sentinel1Visible={layerVisibility.satellite}
+              sentinel2Visible={layerVisibility.satellite}
+            />
+
+            {plan && layerVisibility.routes && (
               <MissionRouteLayer
                 viewer={v}
                 routes={plan.routes}
@@ -137,10 +194,22 @@ function App() {
               />
             )}
 
+            {/* Full iceberg intelligence: historical track, predicted
+                trajectory and uncertainty for every tracked berg, not just
+                the ones near the selected route -- restores the existing
+                IcebergLayer under the ICEBERGS toggle. */}
+            <IcebergLayer
+              viewer={v}
+              visible={showIcebergs}
+              observedIcebergs={observedIcebergs}
+              forecastMap={icebergForecasts}
+              selectedHorizon={selectedHorizon}
+            />
+
             {selectedRoute && (
               <RouteHazardLayer
                 viewer={v}
-                visible={phase !== 'setup'}
+                visible={showIcebergs}
                 relevantIcebergs={selectedRoute.iceberg_exposure.relevant_icebergs}
                 positions={icebergPositions}
                 focusedIcebergId={focusedIcebergId}
@@ -166,8 +235,33 @@ function App() {
       <MapLegend
         phase={phase}
         showIce={showIce}
-        hasHazards={Boolean(selectedRoute?.iceberg_exposure.relevant_icebergs.length)}
+        hasHazards={showIcebergs && Boolean(selectedRoute?.iceberg_exposure.relevant_icebergs.length)}
       />
+
+      {phase !== 'setup' && (
+        <MapLayerControls
+          visibility={layerVisibility}
+          onToggle={toggleLayer}
+          satelliteConnected={isSatelliteConnected('sentinel-1') || isSatelliteConnected('sentinel-2')}
+        />
+      )}
+
+      {phase !== 'setup' && (
+        <ForecastTimeline
+          selectedHorizon={selectedHorizon}
+          onSelectHorizon={setSelectedHorizon}
+          isLoading={isHazardLoading}
+        />
+      )}
+
+      {selection?.kind === 'iceberg' && (
+        <IcebergInspector
+          berg={observedIcebergs.find((b) => b.id === selection.id)}
+          forecast={icebergForecasts[selection.id]}
+          route={selectedRoute}
+          onClose={() => setSelection(null)}
+        />
+      )}
 
       <div className="mission-shell">
         <CommandBar

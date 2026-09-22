@@ -1,6 +1,4 @@
-import { useEffect, useRef } from 'react';
 import {
-  CustomDataSource,
   Cartesian2,
   Cartesian3,
   Color,
@@ -12,6 +10,7 @@ import {
   type Viewer,
 } from 'cesium';
 import { ICEBERGS } from '../data/missionData';
+import { useCesiumDataSource } from './useCesiumDataSource';
 import type { DriftForecastResponse } from '../services/boreasApi';
 import type { ObservedIceberg } from '../types/observation';
 import type { IcebergForecast } from '../types/state';
@@ -62,12 +61,11 @@ export const IcebergLayer = ({
   forecastMap,
   selectedHorizon = 0,
 }: IcebergLayerProps) => {
-  const sourceRef = useRef<CustomDataSource | null>(null);
-
-  useEffect(() => {
-    const source = new CustomDataSource('icebergs');
-    viewer.dataSources.add(source);
-    sourceRef.current = source;
+  useCesiumDataSource(
+    viewer,
+    'icebergs',
+    (source) => {
+    source.show = visible;
 
     const bergsToRender = (observedIcebergs && observedIcebergs.length > 0)
       ? observedIcebergs
@@ -299,17 +297,9 @@ export const IcebergLayer = ({
       });
     });
 
-    return () => {
-      if (!viewer.isDestroyed()) {
-        viewer.dataSources.remove(source, true);
-      }
-      sourceRef.current = null;
-    };
-  }, [viewer, observedIcebergs, liveDrift, forecastMap, selectedHorizon]);
-
-  useEffect(() => {
-    if (sourceRef.current) sourceRef.current.show = visible;
-  }, [visible]);
+    },
+    [viewer, visible, observedIcebergs, liveDrift, forecastMap, selectedHorizon],
+  );
 
   return null;
 };

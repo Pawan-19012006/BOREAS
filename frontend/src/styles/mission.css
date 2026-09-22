@@ -1080,6 +1080,129 @@ input[type='range']::-moz-range-thumb {
   color: var(--ink-muted);
 }
 
+/* ============================ Map layer controls ============================ */
+
+/* Google-Maps-style layer toggles, sitting directly over the globe -- never
+   hidden inside a side panel, since these are the controls that make the
+   environmental intelligence visible in the first place. */
+.map-layer-controls {
+  position: absolute;
+  top: calc(52px + var(--space-3)); /* below the command bar */
+  left: var(--space-4);
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  max-width: min(560px, calc(100vw - var(--space-4) * 2));
+}
+
+.layer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-condensed);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  padding: 7px 14px;
+  min-height: 36px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.layer-pill:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.layer-pill[aria-pressed='true'] {
+  background: rgba(255, 179, 0, 0.12);
+  border-color: var(--signal);
+  color: var(--ink);
+}
+
+.layer-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-dim);
+  flex-shrink: 0;
+}
+
+.layer-pill-dot[data-on='true'] {
+  background: var(--signal);
+  box-shadow: 0 0 0 3px rgba(255, 179, 0, 0.18);
+}
+
+.layer-pill-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+}
+
+.layer-pill-tag.live {
+  color: var(--go);
+}
+
+.layer-pill-tag.off {
+  color: var(--ink-dim);
+}
+
+@media (max-width: 900px) {
+  .map-layer-controls {
+    top: calc(52px + var(--space-2));
+    left: var(--space-2);
+    right: var(--space-2);
+    max-width: none;
+  }
+
+  .layer-pill {
+    font-size: 12px;
+    padding: 6px 10px;
+    min-height: 32px;
+  }
+}
+
+/* ============================ Iceberg inspector ============================ */
+
+.iceberg-inspector {
+  position: absolute;
+  top: calc(52px + var(--space-3));
+  /* Docked just to the left of the main side panel, not on top of it --
+     the panel already occupies the right edge in every phase but setup. */
+  right: calc(var(--panel-w) + var(--space-4) * 2);
+  z-index: 35;
+  width: 340px;
+  max-width: calc(100vw - var(--space-4) * 2);
+  max-height: min(70vh, 560px);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .iceberg-inspector {
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto;
+    top: auto;
+    bottom: var(--space-3);
+    max-height: 46vh;
+  }
+}
+
 /* ============================ Map legend ============================ */
 
 .map-legend {

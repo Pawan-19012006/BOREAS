@@ -1,0 +1,47 @@
+// Prominent, Google-Maps-style map layer toggles, sitting directly over the
+// globe rather than tucked inside a side panel. Each pill controls exactly
+// one existing Cesium layer in App.tsx -- this component holds no rendering
+// logic of its own, only the on/off state and, for Satellite, the real
+// backend-checked connectivity label (the honesty contract: never claim
+// REAL/CDSE unless the backend actually reports it connected).
+
+import type { LayerVisibility } from '../../App';
+
+interface MapLayerControlsProps {
+  visibility: LayerVisibility;
+  onToggle: (key: keyof LayerVisibility) => void;
+  satelliteConnected: boolean;
+}
+
+const LAYERS: { key: keyof LayerVisibility; label: string }[] = [
+  { key: 'routes', label: 'Routes' },
+  { key: 'icebergs', label: 'Icebergs' },
+  { key: 'seaIce', label: 'Sea ice' },
+  { key: 'satellite', label: 'Satellite' },
+];
+
+export const MapLayerControls = ({ visibility, onToggle, satelliteConnected }: MapLayerControlsProps) => {
+  return (
+    <div className="map-layer-controls" role="group" aria-label="Map layers">
+      {LAYERS.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          className="layer-pill"
+          aria-pressed={visibility[key]}
+          onClick={() => onToggle(key)}
+        >
+          <span className="layer-pill-dot" data-on={visibility[key]} />
+          {label}
+          {key === 'satellite' && (
+            <span className={`layer-pill-tag ${satelliteConnected ? 'live' : 'off'}`}>
+              {satelliteConnected ? 'Real · CDSE' : 'Not connected'}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+export default MapLayerControls;
