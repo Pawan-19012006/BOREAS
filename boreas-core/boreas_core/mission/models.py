@@ -39,6 +39,17 @@ class MissionPlanRequest(BaseModel):
     horizon_hours: int = Field(0, description="Forecast horizon used for hazard evaluation")
     weights: RouteWeights = Field(default_factory=RouteWeights)
     ice_thresholds: IceThresholdsIn | None = None
+    start_lon: float | None = Field(
+        None,
+        ge=-180.0,
+        le=180.0,
+        description=(
+            "Overrides the mission's fixed origin (e.g. Cape Town) with a custom start point -- "
+            "the vessel's current position for an underway replan. Must be supplied together with "
+            "start_lat. Reuses the same A* engine and navigation domain; not a second routing path."
+        ),
+    )
+    start_lat: float | None = Field(None, ge=-90.0, le=90.0)
 
     @field_validator("mission_id")
     @classmethod
@@ -53,6 +64,12 @@ class MissionPlanRequest(BaseModel):
         if v not in VALID_HORIZONS_HOURS:
             raise ValueError(f"horizon_hours must be one of {list(VALID_HORIZONS_HOURS)}")
         return v
+
+    @model_validator(mode="after")
+    def _start_override_is_paired(self) -> "MissionPlanRequest":
+        if (self.start_lon is None) != (self.start_lat is None):
+            raise ValueError("start_lon and start_lat must be supplied together")
+        return self
 
 
 class FuelEstimate(BaseModel):

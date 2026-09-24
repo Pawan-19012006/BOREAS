@@ -16,7 +16,7 @@ from boreas_core.mission.config import (
     MISSIONS,
     profile_for_ice_class,
 )
-from boreas_core.mission.fields import BergHazard, build_snapshot, domain_axes, in_domain, land_mask
+from boreas_core.mission.fields import BergHazard, build_snapshot, domain_axes, haversine_km_array, in_domain, land_mask
 from boreas_core.mission.planner import MIN_SEPARATION_KM, _evaluate_route, _separation_km
 from boreas_core.mission.fields import FieldModel
 
@@ -284,3 +284,42 @@ def test_deterministic():
     b = plan_mission(MissionPlanRequest(mission_id="CAPE_TOWN_TO_MAITRI", horizon_hours=48), snapshot=build_snapshot(48))
     assert [r.coordinates for r in a.routes] == [r.coordinates for r in b.routes]
     assert [r.risk_score for r in a.routes] == [r.risk_score for r in b.routes]
+
+
+# --------------------------------------------- start position override ---
+# Exercised by the shore<->ship coordination workflow (boreas_core.coordination)
+# for an underway replan: the vessel's current position, not the mission's
+# fixed origin (e.g. Cape Town), becomes the search's start cell.
+
+
+def test_start_override_begins_near_the_given_point_not_the_mission_origin():
+    # Roughly mid-corridor for Bharati, well clear of Cape Town.
+    start_lon, start_lat = 45.0, -55.0
+    plan = plan_mission(
+        MissionPlanRequest(mission_id="CAPE_TOWN_TO_BHARATI", start_lon=start_lon, start_lat=start_lat)
+    )
+    assert plan.domain.origin_snap_km < 60
+    assert "Current position" in plan.origin_name
+    mission = MISSIONS["CAPE_TOWN_TO_BHARATI"]
+    for route in plan.routes:
+        assert route.coordinates[0] == [start_lon, start_lat]
+        assert route.coordinates[-1] == list(mission.destination)
+        # first vertex is near the override, not near Cape Town
+        cape_town_km = haversine_km_array(*route.coordinates[1], *mission.origin)
+        override_km = haversine_km_array(*route.coordinates[1], start_lon, start_lat)
+        assert override_km < cape_town_km
+
+
+def test_start_override_requires_both_coordinates():
+    resp = client.post(
+        "/mission/plan", json={"mission_id": "CAPE_TOWN_TO_BHARATI", "start_lon": 45.0}
+    )
+    assert resp.status_code == 422
+
+
+def test_start_override_still_out_of_domain_rejected():
+    resp = client.post(
+        "/mission/plan",
+        json={"mission_id": "CAPE_TOWN_TO_BHARATI", "start_lon": 45.0, "start_lat": -10.0},
+    )
+    assert resp.status_code == 422

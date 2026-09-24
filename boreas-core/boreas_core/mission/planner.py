@@ -365,7 +365,19 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     weights = request.weights.normalized()
     snapshot = snapshot or build_snapshot(request.horizon_hours)
 
-    for name, (lon, lat) in (("origin", mission.origin), ("destination", mission.destination)):
+    # An underway replan starts from the vessel's actual current position rather
+    # than the mission's fixed origin (e.g. Cape Town) -- same A* engine and
+    # navigation domain, just a different start cell. See coordination/service.py
+    # for the shore<->ship workflow that supplies this.
+    origin_overridden = request.start_lon is not None and request.start_lat is not None
+    origin = (request.start_lon, request.start_lat) if origin_overridden else mission.origin
+    origin_name = (
+        f"Current position ({request.start_lat:.2f}, {request.start_lon:.2f})"
+        if origin_overridden
+        else mission.origin_name
+    )
+
+    for name, (lon, lat) in (("origin", origin), ("destination", mission.destination)):
         if not in_domain(lon, lat):
             raise ValueError(f"{name} is outside the navigation domain")
 
@@ -378,7 +390,7 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     def cell_of(lon, lat):
         return int(np.argmin(np.abs(lats - lat))), int(np.argmin(np.abs(lons - lon)))
 
-    start, goal = cell_of(*mission.origin), cell_of(*mission.destination)
+    start, goal = cell_of(*origin), cell_of(*mission.destination)
 
     # -- candidate pool
     candidates: list[dict] = []
@@ -387,7 +399,7 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
         lonlat = list(result.path_lonlat)
         if any(_separation_km(lonlat, c["lonlat"]) < MIN_SEPARATION_KM for c in candidates):
             return False
-        coords = [list(mission.origin)] + [[float(lo), float(la)] for lo, la in lonlat] + [list(mission.destination)]
+        coords = [list(origin)] + [[float(lo), float(la)] for lo, la in lonlat] + [list(mission.destination)]
         candidates.append(
             {
                 "weights": w,
@@ -510,7 +522,7 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     return MissionPlanResponse(
         mission_id=mission.mission_id,
         mission_label=mission.label,
-        origin_name=mission.origin_name,
+        origin_name=origin_name,
         destination_name=mission.destination_name,
         vessel=VesselSummary(
             id=vessel.id,
@@ -531,7 +543,7 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
             lon_range=list(DOMAIN_LON_RANGE),
             lat_range=list(DOMAIN_LAT_RANGE),
             resolution_deg=DOMAIN_RESOLUTION_DEG,
-            origin_snap_km=round(_snap_km(*mission.origin, lons, lats, start), 1),
+            origin_snap_km=round(_snap_km(*origin, lons, lats, start), 1),
             destination_snap_km=round(_snap_km(*mission.destination, lons, lats, goal), 1),
             note=(
                 "Coarse prototype domain with a crude southern-Africa land block; not a navigational chart. "

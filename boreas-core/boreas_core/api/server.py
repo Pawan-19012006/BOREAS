@@ -44,6 +44,19 @@ from boreas_core.mission import (
     VesselNotFound,
     plan_mission,
 )
+from boreas_core.mission.models import RouteWeights
+from boreas_core import coordination
+from boreas_core.coordination import (
+    ActivateRouteRequest,
+    ActiveRoute,
+    MissionInfo,
+    RouteUpdate,
+    RouteUpdateCreate,
+    RouteUpdateRespond,
+    RouteUpdateStatus,
+    SimulateChangeRequest,
+    VesselState,
+)
 from boreas_core.uncertainty.ood import ConfidenceAssessment
 from boreas_core.vessels import live_lookup
 from boreas_core.vessels.roster import ROSTER
@@ -529,8 +542,163 @@ def mission_plan(request: MissionPlanRequest) -> MissionPlanResponse:
         return plan_mission(request)
     except VesselNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Unknown vessel_id: {exc.args[0]}") from exc
-    except NoRouteFound as exc:
+    except ValueError as exc:
+        # Covers NoRouteFound (a ValueError subclass) as well as the plain
+        # ValueError the domain check raises for an out-of-domain start_lon/
+        # start_lat override -- both are planning failures, not server errors.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Level 04: Shore <-> Ship coordination (PROTOTYPE)
+#
+# Simple REST state, polled by both applications -- no message broker, no
+# websockets. `ActiveRoute`/`VesselState` are the shared source of truth for
+# "where is the ship and what route is it following"; `RouteUpdate` is a
+# Captain-in-the-loop proposal that only takes effect once explicitly
+# ACCEPTED. Every route inside these payloads is real `/mission/plan` output
+# -- this layer only adds coordination state around it, never a second
+# routing engine.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/coordination/active-route", response_model=ActiveRoute, status_code=201)
+def coordination_activate_route(request: ActivateRouteRequest) -> ActiveRoute:
+    """Shore's 'Start monitoring': hands over a RoutePlan already produced by
+    `/mission/plan` as the vessel's active route, and starts its SIMULATED
+    voyage clock from now.
+    """
+    try:
+        return coordination.activate_route(
+            mission_id=request.mission_id,
+            vessel_id=request.vessel_id,
+            route=request.route,
+            horizon_hours=request.route.iceberg_exposure.horizon_hours,
+        )
+    except VesselNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown vessel_id: {exc.args[0]}") from exc
+
+
+@app.get("/coordination/active-route/{vessel_id}", response_model=ActiveRoute)
+def coordination_get_active_route(vessel_id: str) -> ActiveRoute:
+    active = coordination.get_active_route(vessel_id)
+    if active is None:
+        raise HTTPException(status_code=404, detail=f"No active route for vessel {vessel_id}")
+    return active
+
+
+@app.get("/coordination/vessel-state/{vessel_id}", response_model=VesselState)
+def coordination_get_vessel_state(vessel_id: str) -> VesselState:
+    """The one canonical current position for this vessel -- SIMULATED,
+    advanced from its active route's own real distance/ETA (see
+    coordination/geo.py); both Shore and Ship poll this, so they never
+    disagree about where the ship is.
+    """
+    state = coordination.compute_vessel_state(vessel_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"No active route for vessel {vessel_id}")
+    return state
+
+
+@app.get("/coordination/mission/{mission_id}", response_model=MissionInfo)
+def coordination_get_mission(mission_id: str) -> MissionInfo:
+    try:
+        return coordination.get_mission_info(mission_id)
+    except coordination.MissionNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown mission_id: {mission_id}") from exc
+
+
+@app.post("/coordination/simulate-environment-change", response_model=RouteUpdateCreate)
+def coordination_simulate_environment_change(request: SimulateChangeRequest) -> RouteUpdateCreate:
+    """Shore's 'SIMULATE ENVIRONMENT CHANGE': the *decision to check now* is
+    SIMULATED (there is no live hazard feed to trigger it automatically),
+    but the resulting comparison is not -- it replans with `plan_mission`
+    (the same engine as `/mission/plan`) from the vessel's actual current
+    position, at an advanced forecast horizon, so old and new are two real,
+    independently-computed routes. Returns a proposal Shore can review and
+    then persist via POST /coordination/route-updates.
+    """
+    active = coordination.get_active_route(request.vessel_id)
+    if active is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active route for vessel {request.vessel_id}; start monitoring first.",
+        )
+    vstate = coordination.compute_vessel_state(request.vessel_id)
+    if vstate is None or vstate.is_complete:
+        raise HTTPException(status_code=422, detail="Vessel has completed its route; nothing to replan.")
+
+    new_horizon = min(active.horizon_hours + 24, 120)
+    weights = active.route.search_weights
+    if new_horizon == active.horizon_hours:
+        # Already at the maximum modelled horizon: bias toward risk avoidance
+        # instead, so a genuinely different real route is still produced.
+        weights = RouteWeights(risk=weights.risk + 0.3, fuel=weights.fuel, eta=weights.eta)
+
+    try:
+        plan = plan_mission(
+            MissionPlanRequest(
+                mission_id=active.mission_id,
+                vessel_id=active.vessel_id,
+                horizon_hours=new_horizon,
+                weights=weights,
+                start_lon=vstate.longitude,
+                start_lat=vstate.latitude,
+            )
+        )
+    except VesselNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown vessel_id: {exc.args[0]}") from exc
+    except (NoRouteFound, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    new_route = next((r for r in plan.routes if r.route_id == "recommended"), plan.routes[0])
+    reason = coordination.describe_route_change(active.route, new_route, active.horizon_hours, new_horizon)
+
+    return RouteUpdateCreate(
+        mission_id=active.mission_id,
+        vessel_id=active.vessel_id,
+        reason=reason,
+        current_position=[vstate.longitude, vstate.latitude],
+        old_route=active.route,
+        new_route=new_route,
+    )
+
+
+@app.post("/coordination/route-updates", response_model=RouteUpdate, status_code=201)
+def coordination_create_route_update(payload: RouteUpdateCreate) -> RouteUpdate:
+    """Shore's 'SEND ROUTE UPDATE': persists the proposal as PENDING, making
+    it visible to the Ship application (which polls the list below)."""
+    return coordination.create_route_update(payload)
+
+
+@app.get("/coordination/route-updates", response_model=list[RouteUpdate])
+def coordination_list_route_updates(
+    vessel_id: str | None = None, status: RouteUpdateStatus | None = None
+) -> list[RouteUpdate]:
+    return coordination.list_route_updates(vessel_id=vessel_id, status=status)
+
+
+@app.get("/coordination/route-updates/{update_id}", response_model=RouteUpdate)
+def coordination_get_route_update(update_id: str) -> RouteUpdate:
+    update = coordination.get_route_update(update_id)
+    if update is None:
+        raise HTTPException(status_code=404, detail=f"Unknown route update id: {update_id}")
+    return update
+
+
+@app.post("/coordination/route-updates/{update_id}/respond", response_model=RouteUpdate)
+def coordination_respond_route_update(update_id: str, payload: RouteUpdateRespond) -> RouteUpdate:
+    """The Captain's decision. Accepting activates `new_route` immediately --
+    since that route's own coordinates[0] is the position the vessel actually
+    held when the update was proposed, the ship continues seamlessly rather
+    than restarting from the mission's origin.
+    """
+    try:
+        return coordination.respond_to_update(update_id, payload.status)
+    except coordination.RouteUpdateNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown route update id: {update_id}") from exc
+    except coordination.RouteUpdateAlreadyResolved as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/forecast/ensemble-summary", response_model=EnsembleSummaryResponse)
