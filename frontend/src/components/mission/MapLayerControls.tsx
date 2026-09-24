@@ -6,11 +6,14 @@
 // REAL/CDSE unless the backend actually reports it connected).
 
 import type { LayerVisibility } from '../../App';
+import { SATELLITE_STATE_LABEL, type SatelliteState } from '../../hooks/useSatelliteStatus';
 
 interface MapLayerControlsProps {
   visibility: LayerVisibility;
   onToggle: (key: keyof LayerVisibility) => void;
-  satelliteConnected: boolean;
+  /** Probed state, not a guess from whether credentials exist. */
+  satelliteState: SatelliteState;
+  onOpenProvenance: () => void;
 }
 
 const LAYERS: { key: keyof LayerVisibility; label: string }[] = [
@@ -20,7 +23,12 @@ const LAYERS: { key: keyof LayerVisibility; label: string }[] = [
   { key: 'satellite', label: 'Satellite' },
 ];
 
-export const MapLayerControls = ({ visibility, onToggle, satelliteConnected }: MapLayerControlsProps) => {
+export const MapLayerControls = ({
+  visibility,
+  onToggle,
+  satelliteState,
+  onOpenProvenance,
+}: MapLayerControlsProps) => {
   return (
     <div className="map-layer-controls" role="group" aria-label="Map layers">
       {LAYERS.map(({ key, label }) => (
@@ -34,12 +42,17 @@ export const MapLayerControls = ({ visibility, onToggle, satelliteConnected }: M
           <span className="layer-pill-dot" data-on={visibility[key]} />
           {label}
           {key === 'satellite' && (
-            <span className={`layer-pill-tag ${satelliteConnected ? 'live' : 'off'}`}>
-              {satelliteConnected ? 'Real · CDSE' : 'Not connected'}
+            <span className="layer-pill-tag" data-state={satelliteState}>
+              {SATELLITE_STATE_LABEL[satelliteState]}
             </span>
           )}
         </button>
       ))}
+      {/* Where every layer's data comes from, one click away -- provenance
+          should never be buried. */}
+      <button type="button" className="layer-pill layer-pill-ghost" onClick={onOpenProvenance}>
+        Data sources
+      </button>
     </div>
   );
 };

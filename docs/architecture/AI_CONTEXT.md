@@ -80,7 +80,8 @@ BOREAS/
 
 1. **Proxy Boundary**: The browser communicates only with Vite (`:5174` for Shore, `:5176` for Ship). Calls to `/boreas-api/*` are reverse-proxied to `boreas-core` (`http://localhost:8000`) from **both** applications. Upstream satellite credentials never touch the browser.
 2. **Core Process Lifetime Singleton (`boreas_core/api/state.py`)**: `boreas-core` keeps its residual model, SHAP explainer, OOD detector, and router in an in-memory `AppState` initialized once on first call to `get_state()`. There is no SQL database. `boreas_core/coordination/service.py` follows the same in-memory-singleton pattern for the active-route/vessel-state/route-update stores — one shared backend process is the only thing making Shore and Ship agree on vessel state; restarting `boreas-core` clears it.
-3. **Fail-Closed Satellite Architecture**: If satellite credentials are not configured in `.env`, the backend reports `connected: false` and returns HTTP 503 on imagery requests. It **never** serves a fake or mislabeled image as live data.
+3. **Fail-Closed Satellite Architecture**: `/satellite/status` reports one of four states — `CONNECTED`, `NOT_CONFIGURED`, `CONNECTION_ERROR`, `DEMO` — and only reports `CONNECTED` after a **real provider request succeeded** in this process (CDSE OAuth2 token + STAC metadata search). Having credentials in `.env` is never sufficient. Imagery requests return HTTP 503 when unavailable; the backend **never** serves a fake or mislabeled image as live data, and provenance fields with no real value are omitted rather than filled in. `boreas_core/env.py` loads `boreas-core/.env` at server import without overriding real environment variables.
+4. **Risk Is a Constraint, Not a Preference**: the three routes are strategies (RECOMMENDED / LOW-RISK / FUEL-EFFICIENT) assigned from *measured* route metrics under a relative risk-acceptance band, not from caller-supplied weights. `MissionPlanRequest.weights` is an internal A* search-diversification device only; the Shore UI exposes no risk/fuel/ETA sliders. Route geometry is string-pulled after the search so a surviving bend always corresponds to a real environmental cost, reported in `RoutePlan.deviations`.
 4. **Decoupled Upstream Training**: `boreas-core` consumes exported artifacts (`.npz`, `.zip`) from `icenet-mp` but does not import `icenet-mp` directly.
 5. **Shore↔Ship Communication**: Deliberately simple REST + polling (`GET` every ~2s from both apps) — no websockets, no message broker. `boreas_core/coordination/geo.py` is a function-for-function port of `frontend/src/lib/geo.ts`'s great-circle geometry, so the backend's canonical `VesselState` position agrees with how Shore's own client-simulated navigation HUD computes the same kind of value elsewhere.
 
@@ -95,7 +96,7 @@ All backend endpoints are in `boreas_core/api/server.py` and validated by Pydant
 | `/health` | `GET` | None | Dict | Health check & PPO loaded status |
 | `/drift/forecast` | `POST` | `DriftForecastRequest` | `DriftForecastResponse` | RK4 + residual drift trajectory |
 | `/vessels/roster` | `GET` | None | `VesselRosterResponse` | Curated vessel fleet + AIS positions |
-| `/satellite/status` | `GET` | None | `SatelliteStatusResponse` | Credential status for S1, S2, Marine |
+| `/satellite/status` | `GET` | `refresh` (bool) | `SatelliteStatusResponse` | Probed provider state + real observation provenance for S1, S2, Marine |
 | `/satellite/{id}/quicklook`| `GET` | Path parameter | Binary PNG stream | 30-min cached quicklook image |
 | `/route/plan` | `POST` | `RoutePlanRequest` | `RoutePlanResponse` | Multi-engine route options & legs |
 | `/forecast/ensemble-summary`| `GET` | None | `EnsembleSummaryResponse` | Ensemble member stats & MAEs |

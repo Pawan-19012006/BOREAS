@@ -11,7 +11,6 @@ import {
   type MissionPlanResponse,
   type RouteId,
   type RoutePlan,
-  type RouteWeights,
 } from '../services/missionApi';
 
 export type MissionPhase = 'setup' | 'planning' | 'navigating';
@@ -20,7 +19,6 @@ export interface MissionDraft {
   missionId: MissionId;
   vesselId: string;
   horizonHours: number;
-  weights: RouteWeights;
 }
 
 const DEFAULT_DRAFT: MissionDraft = {
@@ -28,8 +26,6 @@ const DEFAULT_DRAFT: MissionDraft = {
   vesselId: '',
   // Matches the backend default: hazards evaluated at the observation epoch.
   horizonHours: 0,
-  // Backend normalises these; these starting values mirror its own defaults.
-  weights: { risk: 0.8, fuel: 0.5, eta: 0.4 },
 };
 
 export interface UseMissionPlannerReturn {
@@ -68,7 +64,6 @@ export function useMissionPlanner(): UseMissionPlannerReturn {
         mission_id: draft.missionId,
         vessel_id: draft.vesselId || undefined,
         horizon_hours: draft.horizonHours,
-        weights: draft.weights,
       });
       setPlan(result);
       // The backend always returns routes ordered recommended-first.

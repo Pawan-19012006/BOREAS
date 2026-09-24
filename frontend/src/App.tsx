@@ -16,6 +16,7 @@ import MapLegend from './components/mission/MapLegend';
 import MapLayerControls from './components/mission/MapLayerControls';
 import IcebergInspector from './components/mission/IcebergInspector';
 import FleetMonitoringPanel from './components/mission/FleetMonitoringPanel';
+import DataProvenancePanel from './components/mission/DataProvenancePanel';
 import { ForecastTimeline } from './components/ForecastTimeline';
 
 import MissionRouteLayer from './layers/MissionRouteLayer';
@@ -24,6 +25,7 @@ import RouteHazardLayer from './layers/RouteHazardLayer';
 import VesselNavLayer from './layers/VesselNavLayer';
 import IcebergLayer from './layers/IcebergLayer';
 import SatelliteImageryLayer from './layers/SatelliteImageryLayer';
+import RouteDeviationLayer from './layers/RouteDeviationLayer';
 
 import { useMissionPlanner } from './hooks/useMissionPlanner';
 import { useMissionHazards } from './hooks/useMissionHazards';
@@ -67,6 +69,7 @@ function App() {
   const [followVessel, setFollowVessel] = useState(true);
   // Only has an effect at bottom-sheet widths; see .panel-dock in mission.css.
   const [isSheetCollapsed, setSheetCollapsed] = useState(false);
+  const [isProvenanceOpen, setProvenanceOpen] = useState(false);
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYER_VISIBILITY);
   // Drives the map's hazard state (sea ice raster + iceberg positions) and the
   // forecast timeline. Reset to the plan's own horizon whenever a new plan
@@ -85,7 +88,7 @@ function App() {
   // Its own selectedHorizon/futureState fields are unused here; the map's
   // horizon is driven by the shared `selectedHorizon` state above instead.
   const { icebergForecasts } = useForecastState();
-  const { isConnected: isSatelliteConnected } = useSatelliteStatus();
+  const satellite = useSatelliteStatus();
   const [selection, setSelection] = useSelectedEntity(viewer);
   // Shore's half of the shore<->ship coordination workflow -- additive to the
   // phase machine above, not part of it: available once a plan exists,
@@ -222,6 +225,14 @@ function App() {
               selectedHorizon={selectedHorizon}
             />
 
+            {selectedRoute && layerVisibility.routes && (
+              <RouteDeviationLayer
+                viewer={v}
+                visible={phase !== 'setup'}
+                deviations={selectedRoute.deviations}
+              />
+            )}
+
             {selectedRoute && (
               <RouteHazardLayer
                 viewer={v}
@@ -274,7 +285,8 @@ function App() {
         <MapLayerControls
           visibility={layerVisibility}
           onToggle={toggleLayer}
-          satelliteConnected={isSatelliteConnected('sentinel-1') || isSatelliteConnected('sentinel-2')}
+          satelliteState={satellite.stateFor('sentinel-1')}
+          onOpenProvenance={() => setProvenanceOpen(true)}
         />
       )}
 
@@ -297,6 +309,16 @@ function App() {
 
       {phase !== 'setup' && (
         <FleetMonitoringPanel plan={plan} selectedRoute={selectedRoute} monitoring={monitoring} />
+      )}
+
+      {isProvenanceOpen && (
+        <DataProvenancePanel
+          satellite={satellite.primarySource()}
+          route={selectedRoute}
+          horizonHours={selectedHorizon}
+          onClose={() => setProvenanceOpen(false)}
+          onRefreshSatellite={satellite.refresh}
+        />
       )}
 
       <div className="mission-shell">

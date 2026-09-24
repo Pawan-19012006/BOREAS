@@ -131,9 +131,66 @@ class WeatherExposure(BaseModel):
     provenance: str
 
 
+class RouteTradeoff(BaseModel):
+    """This route measured against RECOMMENDED. All four are `this - recommended`,
+    so a positive eta_delta_hours means this route is slower."""
+
+    distance_delta_km: float
+    eta_delta_hours: float
+    fuel_delta_t: float
+    risk_delta: float
+
+
+class RiskAcceptability(BaseModel):
+    """Navigation risk as an engine-applied constraint, not an operator preference."""
+
+    risk_score: float = Field(..., description="This route's measured risk score")
+    safest_candidate_risk: float = Field(..., description="Lowest risk score across all candidates")
+    band: float = Field(..., description="How far above the safest candidate still counts as acceptable")
+    within_constraint: bool
+
+
+class RouteDeviation(BaseModel):
+    """A bend the route genuinely needed, and the environmental cost that caused it.
+
+    Produced as a by-product of geometry simplification: when the straight
+    shortcut past a vertex was rejected for crossing materially worse cells,
+    the offending cell is what gets reported here. A bend with no such cause is
+    simplified away rather than explained, so this list never invents a hazard
+    to justify existing geometry.
+    """
+
+    longitude: float = Field(..., description="The retained bend on the route")
+    latitude: float
+    cause_longitude: float = Field(..., description="The high-cost cell the route steered around")
+    cause_latitude: float
+    cause: str = Field(..., description="SEA_ICE | ICEBERG | LAND | NAVIGATION_COST")
+    detail: str = Field(..., description="Short operator-facing reason, e.g. 'Sea ice 82% concentration'")
+    sic_pct: float | None = None
+    iceberg_id: str | None = None
+    iceberg_distance_km: float | None = None
+
+
 class RoutePlan(BaseModel):
     route_id: str
     label: str
+    objective: str = Field(..., description="What this strategy optimises, in operator language")
+    selection_rationale: str = Field(..., description="Why the engine picked this candidate for this role")
+    risk_acceptability: RiskAcceptability
+    tradeoff_vs_recommended: RouteTradeoff | None = Field(
+        None, description="None on the RECOMMENDED route itself"
+    )
+    deviations: list[RouteDeviation] = Field(
+        default_factory=list, description="Bends with a real environmental cause"
+    )
+    shares_track_with: str | None = Field(
+        None,
+        description=(
+            "Set when the environment offers fewer distinct corridors than strategies, and this "
+            "strategy's best answer is the same track another strategy already claimed. Honest "
+            "reporting of a real operational situation, not a duplicate route."
+        ),
+    )
     coordinates: list[list[float]] = Field(..., description="[lon, lat] vertices, origin to destination")
     search_weights: RouteWeights = Field(..., description="Weights of the A* search that produced this geometry (roles are assigned from measured metrics)")
     distance_km: float

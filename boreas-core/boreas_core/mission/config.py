@@ -54,6 +54,68 @@ DOMAIN_LAT_RANGE = (-71.0, -33.0)
 DOMAIN_RESOLUTION_DEG = 1.0
 
 
+# --- Route strategies -------------------------------------------------------
+# The three routes are three operational strategies, not three settings an
+# operator dials in. Navigation risk is a CONSTRAINT applied by the engine,
+# never a preference weight the shore operator tunes: a candidate is
+# "risk-acceptable" when its measured risk score is within
+# RISK_ACCEPTANCE_BAND of the safest candidate the engine could find. The band
+# is relative (not an absolute ceiling) so the constraint is always feasible --
+# an Antarctic station approach is never risk-free, and a fixed ceiling would
+# simply reject every route on the hard legs.
+RISK_ACCEPTANCE_BAND = 0.08
+
+ROUTE_STRATEGIES = {
+    "recommended": {
+        "label": "RECOMMENDED",
+        "objective": "Balanced operational route",
+        "rationale": (
+            "Best overall ETA and fuel trade-off among routes that stay within the "
+            "navigation-risk limit."
+        ),
+    },
+    "low_risk": {
+        "label": "LOW-RISK",
+        "objective": "Minimize navigation risk",
+        "rationale": "Lowest navigation risk of every route available on this leg.",
+    },
+    # route_id stays `fast_fuel` so existing API/coordination contracts keep
+    # working; the objective it actually optimises is fuel, and the label now
+    # says so.
+    "fast_fuel": {
+        "label": "FUEL-EFFICIENT",
+        "objective": "Minimize estimated fuel consumption",
+        "rationale": (
+            "Lowest estimated fuel burn among routes that stay within the navigation-risk limit."
+        ),
+    },
+}
+
+
+# --- Route geometry simplification -----------------------------------------
+# A* moves on an 8-connected grid, so in uniform open water it approximates a
+# straight line with a staircase of alternating diagonal/orthogonal steps.
+# Those bends are an artefact of the lattice, not of the environment. After the
+# search, a shortcut is taken whenever the straight line between two vertices
+# crosses cells no worse than the sub-path it replaces -- so a bend only
+# survives when something real (ice, an iceberg exclusion zone, land) made the
+# direct line more expensive. SIMPLIFY_TOLERANCE is how much extra cell penalty
+# a shortcut may pick up and still be considered "no worse".
+SIMPLIFY_TOLERANCE = 0.02
+# Below this cell penalty a retained bend is not attributed to a named hazard:
+# the cost difference is real but too small to honestly call sea ice or an
+# iceberg the cause.
+DEVIATION_MIN_PENALTY = 0.08
+# A blocked shortcut can be rejected by a cell far from the bend itself --
+# extending a long leg slightly changes its whole bearing, so the cell that
+# kills it may sit thousands of km away near the other end. That attribution is
+# true of the rejected shortcut but useless as a local explanation, and drawing
+# it would put a "landmass" label on open ocean half a map away. Beyond this
+# distance the bend is reported as generic navigation cost instead of being
+# pinned on a hazard the operator cannot see near it.
+DEVIATION_MAX_CAUSE_DISTANCE_KM = 400.0
+
+
 # --- Sea-ice passability (PROTOTYPE PASSABILITY MODEL) ---
 @dataclass(frozen=True)
 class IceThresholds:

@@ -147,9 +147,32 @@ class VesselRosterResponse(BaseModel):
     vessels: list[VesselOut]
 
 
+class SatelliteObservation(BaseModel):
+    """Provenance for one real satellite observation, as returned by the
+    provider. Absent when no real request has succeeded -- never synthesised."""
+
+    product_id: str
+    acquired_at: str = Field(..., description="Acquisition time reported by the provider")
+    bbox: list[float]
+    collection: str
+    extra: dict = Field(default_factory=dict)
+
+
 class SatelliteSourceStatus(BaseModel):
-    connected: bool
+    state: str = Field(
+        ..., description="CONNECTED | NOT_CONFIGURED | CONNECTION_ERROR | DEMO"
+    )
     reason: str
+    provider: str
+    credentials_configured: bool
+    imagery_available: bool = Field(
+        False, description="Whether pixels (not just metadata) can be requested"
+    )
+    checked_at: str | None = Field(None, description="When this probe actually ran")
+    observation: SatelliteObservation | None = None
+    connected: bool = Field(
+        ..., description="True only when a real provider request succeeded (state == CONNECTED)"
+    )
 
 
 class SatelliteStatusResponse(BaseModel):

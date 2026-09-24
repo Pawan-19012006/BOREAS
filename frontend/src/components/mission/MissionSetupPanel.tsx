@@ -3,9 +3,10 @@
 //
 // Every vessel field shown here is real data from GET /observe/vessels --
 // no invented tonnage, draft or range fields that the backend has no concept
-// of. The weights map directly onto the planner's own risk/fuel/eta inputs.
+// of. There is deliberately no risk/fuel/ETA weighting control: risk is a
+// constraint the route engine applies, not an operator preference to tune.
 
-import { MISSIONS, type MissionId, type RouteWeights } from '../../services/missionApi';
+import { MISSIONS, type MissionId } from '../../services/missionApi';
 import { FORECAST_HORIZONS } from '../../services/missionApi';
 import { formatLatitude, formatLongitude } from '../../lib/geo';
 import type { ObservedVessel } from '../../types/observation';
@@ -21,12 +22,6 @@ interface MissionSetupPanelProps {
   onCalculate: () => void;
 }
 
-const WEIGHT_KEYS: { key: keyof RouteWeights; label: string; hint: string }[] = [
-  { key: 'risk', label: 'Risk', hint: 'Ice, icebergs and sea state' },
-  { key: 'fuel', label: 'Fuel', hint: 'Consumption over the passage' },
-  { key: 'eta', label: 'Time', hint: 'Total transit hours' },
-];
-
 export const MissionSetupPanel = ({
   draft,
   vessels,
@@ -38,10 +33,6 @@ export const MissionSetupPanel = ({
 }: MissionSetupPanelProps) => {
   const selectedVessel = vessels.find((v) => v.id === draft.vesselId) ?? null;
   const mission = MISSIONS.find((m) => m.id === draft.missionId)!;
-
-  // Shown as normalised shares, because that is what the backend actually
-  // applies — displaying raw slider values would misrepresent the weighting.
-  const weightTotal = draft.weights.risk + draft.weights.fuel + draft.weights.eta;
 
   return (
     <aside className="panel" aria-label="Voyage setup">
@@ -160,35 +151,13 @@ export const MissionSetupPanel = ({
         </section>
 
         <section className="panel-section">
-          <p className="section-label">Optimiser weighting</p>
-
-          {WEIGHT_KEYS.map(({ key, label, hint }) => {
-            const share = weightTotal > 0 ? draft.weights[key] / weightTotal : 0;
-            return (
-              <div key={key}>
-                <div className="weight-row">
-                  <span className="weight-name">{label}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={draft.weights[key]}
-                    aria-label={`${label} weighting`}
-                    onChange={(e) =>
-                      onChange({
-                        weights: { ...draft.weights, [key]: Number(e.target.value) },
-                      })
-                    }
-                  />
-                  <span className="weight-value">{(share * 100).toFixed(0)}%</span>
-                </div>
-                <p className="field-hint" style={{ marginTop: 0, marginBottom: 10 }}>
-                  {hint}
-                </p>
-              </div>
-            );
-          })}
+          <p className="section-label">Route strategies</p>
+          <p className="field-hint" style={{ marginTop: 0 }}>
+            BOREAS returns three routes for this passage: a{' '}
+            <strong>recommended</strong> balanced route, a <strong>low-risk</strong> route, and a{' '}
+            <strong>fuel-efficient</strong> route. Navigation risk is applied as a constraint by
+            the route engine, so every option is one the vessel can actually take.
+          </p>
         </section>
 
       </div>
@@ -207,7 +176,7 @@ export const MissionSetupPanel = ({
           type="button"
           className="btn btn-primary"
           onClick={onCalculate}
-          disabled={isCalculating || !backendOnline || weightTotal <= 0}
+          disabled={isCalculating || !backendOnline}
         >
           {isCalculating ? 'Calculating…' : 'Calculate route'}
         </button>

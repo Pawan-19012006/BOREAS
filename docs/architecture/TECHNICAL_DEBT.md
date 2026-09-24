@@ -144,3 +144,35 @@ This document provides a categorized, evidence-based audit of technical debt, la
 - **Evidence**: Sea-ice concentration uncertainty is computed via the deep ensemble (5.2), while iceberg drift uncertainty is computed via XGBoost residual perturbations and Mahalanobis distance (5.3/5.4).
 - **Analysis**: The two uncertainty models do not feed into one another. The iceberg drift model does not consume the ensemble sea-ice uncertainty as a boundary condition for hydrodynamic resistance.
 - **Impact**: Subsystems operate as distinct silos rather than a unified uncertainty field.
+
+---
+
+## 7. Operational Realism Gaps (mission planner & provenance)
+
+### TD-11: Route Strategies Can Share a Track When the Environment Offers One Corridor
+- **Category**: Product Honesty / Search Diversity
+- **Location**: `boreas_core/mission/planner.py` (`take()` / `shares_track_with`)
+- **Evidence**: On `CAPE_TOWN_TO_MAITRI`, every candidate weight vector except pure-risk converges on the same near-straight track; the k-alternative corridor detours that previously made routes look distinct were lattice/corridor artefacts and are correctly removed by string-pulling.
+- **Analysis**: Rather than fabricate a detour to fill three cards, a strategy may reuse another's geometry and reports `shares_track_with` plus a warning. This is honest but means the UI can show two identical tracks.
+- **Impact**: Reduced apparent choice on easy legs. A real fix needs genuinely different corridor generation (e.g. lateral-offset seeds or a proper k-shortest-paths formulation), not more weight vectors.
+
+### TD-12: Deviation Causes Are Attributed From the Rejected Shortcut, Not a Local Search
+- **Category**: Explanation Fidelity
+- **Location**: `boreas_core/mission/planner.py` (`_simplify_path`, `_describe_deviations`), `mission/config.py:DEVIATION_MAX_CAUSE_DISTANCE_KM`
+- **Evidence**: A blocked shortcut's worst cell can sit thousands of km from the bend, because lengthening a leg changes its whole bearing. This produced a `LAND` label over open ocean with a map-spanning leader line.
+- **Analysis**: Mitigated by downgrading any cause further than 400 km from its bend to `NAVIGATION_COST` (which the UI does not annotate). The attribution is still "the cell that killed the shortcut", not "the nearest hazard the bend steers around".
+- **Impact**: Some genuinely environmental bends are reported as generic navigation cost rather than named. Deliberately conservative — under-explaining beats mislabelling.
+
+### TD-13: `copernicus-marine` Has No Live Probe
+- **Category**: Data Provenance
+- **Location**: `boreas_core/satellite/status.py:_copernicus_marine_status`
+- **Evidence**: The source always reports `DEMO`, even when `COPERNICUSMARINE_SERVICE_*` credentials are configured.
+- **Analysis**: No lightweight metadata endpoint equivalent to CDSE STAC was integrated, so no real request can be made to justify `CONNECTED`. Reporting `DEMO` is the honest option.
+- **Impact**: Marine data is never shown as real, regardless of credentials.
+
+### TD-14: CDSE STAC Probe Latency
+- **Category**: Performance
+- **Location**: `boreas_core/satellite/status.py:STAC_PROBE_TIMEOUT_S`
+- **Evidence**: The public CDSE STAC search takes ~18 s for the mission bounding box; the timeout had to be raised to 40 s.
+- **Analysis**: Masked by a 15-minute success cache / 60-second failure cache, but the first probe after start-up (and every `refresh=true`) blocks that request.
+- **Impact**: Slow first `/satellite/status` response; a narrower bbox or a datetime-bounded query would likely help.

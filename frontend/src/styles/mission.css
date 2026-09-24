@@ -745,6 +745,113 @@ input[type='range']::-moz-range-thumb {
   color: var(--danger);
 }
 
+/* ================= Route strategy / trade-off presentation ================= */
+
+.route-objective {
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin: -4px 0 var(--space-3);
+}
+
+.route-card[data-selected='true'] .route-objective {
+  color: var(--ink-muted);
+}
+
+/* Risk / ice / iceberg / weather exposure, compact enough to scan across
+   three cards without expanding anything. */
+.exposure-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.exposure-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.tradeoff-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.tradeoff-label {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.route-shared-note {
+  margin-top: var(--space-2);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--caution);
+}
+
+.why-selected {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+  max-width: 62ch;
+}
+
+/* Why the track bends: cause chip + the measured detail behind it. */
+.deviation-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(143, 180, 206, 0.07);
+  font-size: 12px;
+}
+
+.deviation-item:last-child {
+  border-bottom: none;
+}
+
+.deviation-cause {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.deviation-cause[data-cause='SEA_ICE'] {
+  color: var(--ice);
+}
+
+.deviation-cause[data-cause='ICEBERG'] {
+  color: var(--signal);
+}
+
+.deviation-cause[data-cause='LAND'] {
+  color: var(--ink-dim);
+}
+
+.deviation-detail {
+  color: var(--ink-muted);
+  min-width: 0;
+}
+
 /* ============================ Ice exposure bar ============================ */
 
 .ice-bar {
@@ -1148,12 +1255,95 @@ input[type='range']::-moz-range-thumb {
   border: 1px solid currentColor;
 }
 
-.layer-pill-tag.live {
+/* Probed satellite state. Only CONNECTED gets the "live" colour, because
+   only CONNECTED means a provider request actually succeeded. */
+.layer-pill-tag[data-state='CONNECTED'] {
   color: var(--go);
 }
 
-.layer-pill-tag.off {
+.layer-pill-tag[data-state='DEMO'] {
+  color: var(--caution);
+}
+
+.layer-pill-tag[data-state='CONNECTION_ERROR'] {
+  color: var(--danger);
+}
+
+.layer-pill-tag[data-state='NOT_CONFIGURED'] {
   color: var(--ink-dim);
+}
+
+.layer-pill-ghost {
+  border-style: dashed;
+}
+
+/* ============================ Data provenance ============================ */
+
+.provenance-panel {
+  position: absolute;
+  top: calc(52px + var(--space-3));
+  right: calc(var(--panel-w) + var(--space-4) * 2);
+  z-index: 35;
+  width: 360px;
+  max-width: calc(100vw - var(--space-4) * 2);
+  max-height: min(74vh, 620px);
+}
+
+.provenance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.provenance-source {
+  font-family: var(--font-condensed);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
+.provenance-id {
+  font-size: 11px;
+  word-break: break-all;
+  text-align: right;
+}
+
+.mode-tag {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 1px 7px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.mode-tag[data-mode='REAL'] {
+  color: var(--go);
+}
+
+.mode-tag[data-mode='DERIVED'] {
+  color: var(--ice);
+}
+
+.mode-tag[data-mode='SIMULATED'],
+.mode-tag[data-mode='DEMO'] {
+  color: var(--caution);
+}
+
+@media (max-width: 900px) {
+  .provenance-panel {
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto;
+    top: auto;
+    bottom: var(--space-3);
+    max-height: 52vh;
+  }
 }
 
 @media (max-width: 900px) {

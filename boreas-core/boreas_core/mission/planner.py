@@ -21,11 +21,16 @@ from boreas_core.routing.astar import astar_route
 
 from .config import (
     DEFAULT_ICE_THRESHOLDS,
+    DEVIATION_MAX_CAUSE_DISTANCE_KM,
+    DEVIATION_MIN_PENALTY,
     DOMAIN_LAT_RANGE,
     DOMAIN_LON_RANGE,
     DOMAIN_RESOLUTION_DEG,
     MISSIONS,
     PASSABILITY_LEVELS,
+    RISK_ACCEPTANCE_BAND,
+    ROUTE_STRATEGIES,
+    SIMPLIFY_TOLERANCE,
     IceThresholds,
     profile_for_ice_class,
 )
@@ -48,7 +53,10 @@ from .models import (
     MissionPlanRequest,
     MissionPlanResponse,
     RelevantIceberg,
+    RiskAcceptability,
+    RouteDeviation,
     RoutePlan,
+    RouteTradeoff,
     RouteWeights,
     SeaIceExposure,
     VesselSummary,
@@ -64,9 +72,12 @@ MAX_POOL = 9
 MIN_SEPARATION_KM = 40.0  # mean lateral separation below which two routes count as "the same"
 HIGH_SEA_STATE_M = 4.0
 
-# Candidate pool: one A* search per weight vector (risk, fuel, eta), plus the caller's
-# own weights. Roles (recommended / low-risk / fast-fuel) are assigned afterwards
-# from the *measured* route metrics, never from the weights that produced a route.
+# Candidate pool: one A* search per weight vector (risk, fuel, eta). These are
+# an internal search-diversification device for generating a spread of distinct
+# candidates -- they are NOT operator preferences, and are never surfaced as
+# such. Strategies (recommended / low-risk / fuel-efficient) are assigned
+# afterwards from the *measured* route metrics under a risk constraint, never
+# from the weight vector that happened to produce a candidate.
 POOL_WEIGHTS = [
     (1.0, 0.0, 0.0),
     (0.8, 0.1, 0.1),
@@ -78,11 +89,6 @@ POOL_WEIGHTS = [
     (0.0, 1.0, 0.0),
     (0.0, 0.0, 1.0),
 ]
-ROLE_LABELS = {
-    "recommended": "RECOMMENDED",
-    "low_risk": "LOW-RISK ALTERNATIVE",
-    "fast_fuel": "FASTEST / FUEL-ORIENTED",
-}
 DRIVER_NAMES = {
     "sea_ice": "SEA_ICE_CONCENTRATION",
     "iceberg": "ICEBERG_EXPOSURE",
@@ -140,6 +146,222 @@ def _search(lons, lats, penalty: np.ndarray, land: np.ndarray, start, goal):
 
 def _snap_km(lon, lat, lons, lats, cell) -> float:
     return float(haversine_km_array(lon, lat, lons[cell[1]], lats[cell[0]]))
+
+
+# --------------------------------------------------------- geometry cleanup ---
+
+
+def _line_cells(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+    """Grid cells a straight segment from `a` to `b` passes through."""
+    r0, c0 = a
+    r1, c1 = b
+    steps = max(abs(r1 - r0), abs(c1 - c0))
+    if steps == 0:
+        return [a]
+    out = []
+    for s in range(steps + 1):
+        t = s / steps
+        out.append((round(r0 + (r1 - r0) * t), round(c0 + (c1 - c0) * t)))
+    return out
+
+
+def _path_cost(cells: list[tuple[int, int]], risk_eff, lons, lats) -> float:
+    """Cost of a cell polyline under the same rule A* itself used:
+    `distance x (1 + RISK_WEIGHT_SCALE x mean endpoint risk)` per step. Using
+    A*'s own cost is what makes the shortcut test meaningful -- a shortcut is
+    only taken when the search would have preferred it too."""
+    total = 0.0
+    for a, b in zip(cells[:-1], cells[1:]):
+        d = float(haversine_km_array(lons[a[1]], lats[a[0]], lons[b[1]], lats[b[0]]))
+        total += d * (1.0 + RISK_WEIGHT_SCALE * 0.5 * (float(risk_eff[a]) + float(risk_eff[b])))
+    return total
+
+
+def _simplify_path(
+    path_cells: list[tuple[int, int]],
+    risk_eff,
+    lons,
+    lats,
+    *,
+    hazard_field=None,
+    tolerance: float = SIMPLIFY_TOLERANCE,
+    blocked_threshold: float = 0.95,
+) -> tuple[list[tuple[int, int]], dict[tuple[int, int], tuple[int, int]]]:
+    """Greedy string-pulling over the A* path, preserving A*'s own cost.
+
+    A vertex is dropped when the straight line past it costs no more than the
+    sub-path it replaces. In uniform open water the staircase is strictly
+    longer than the straight line, so every such shortcut is cheaper and the
+    lattice artefact collapses to a straight leg. Near ice or an iceberg
+    exclusion zone the straight line crosses costlier cells, the shortcut is
+    rejected, and the bend survives -- so every remaining bend is one the
+    environment actually paid for.
+
+    Comparing *path cost* rather than peak cell penalty matters: on an
+    Antarctic approach the unavoidable station leg pins the peak near the
+    blocked threshold for the whole route, which would make a peak-based test
+    accept every shortcut and flatten the route into a straight line.
+
+    Returns the simplified cells and, for each retained bend, the offending
+    cell that blocked the shortcut -- the causal record behind
+    `RoutePlan.deviations`.
+    """
+    if len(path_cells) <= 2:
+        return list(path_cells), {}
+
+    simplified = [path_cells[0]]
+    causes: dict[tuple[int, int], tuple[int, int]] = {}
+    i = 0
+    last = len(path_cells) - 1
+
+    while i < last:
+        best_j = i + 1
+        # Longest shortcut first, so we drop as many lattice artefacts as possible.
+        for j in range(last, i + 1, -1):
+            shortcut = _line_cells(path_cells[i], path_cells[j])
+            # Never shortcut through a cell A* itself treats as impassable.
+            if any(float(risk_eff[c]) >= blocked_threshold for c in shortcut):
+                continue
+            original = path_cells[i : j + 1]
+
+            # Physical-hazard guard, independent of the search weighting.
+            # Candidates are generated with varied weight vectors, and some of
+            # them weight risk at zero -- without this, a shortcut would be
+            # free to cut straight through an iceberg exclusion zone the
+            # original path went around, because that berg contributes nothing
+            # to *that candidate's* cost field. Hazards constrain the geometry
+            # whatever the search was optimising for.
+            if hazard_field is not None:
+                if max(float(hazard_field[c]) for c in shortcut) > max(
+                    float(hazard_field[c]) for c in original
+                ) + tolerance:
+                    continue
+
+            short_cost = _path_cost(shortcut, risk_eff, lons, lats)
+            orig_cost = _path_cost(original, risk_eff, lons, lats)
+            if short_cost <= orig_cost * (1.0 + tolerance):
+                best_j = j
+                break
+
+        if best_j < last:
+            # We stopped short of the destination, so the vertex we stopped at
+            # is a real turn. What made it one is whatever the next-longer
+            # shortcut (i -> best_j+1) would have had to cross: record that
+            # cell as the cause.
+            rejected = _line_cells(path_cells[i], path_cells[best_j + 1])
+            causes[path_cells[best_j]] = max(rejected, key=lambda c: float(risk_eff[c]))
+
+        simplified.append(path_cells[best_j])
+        i = best_j
+
+    return simplified, causes
+
+
+def _describe_deviations(
+    simplified_cells: list[tuple[int, int]],
+    causes: dict[tuple[int, int], tuple[int, int]],
+    *,
+    lons,
+    lats,
+    fields,
+    land,
+    snapshot: HazardSnapshot,
+    thresholds: IceThresholds,
+) -> list[RouteDeviation]:
+    """Turns blocked shortcuts into operator-facing reasons, using only what is
+    actually in the hazard fields at the offending cell. A bend whose cost is
+    real but too small to attribute is reported as NAVIGATION_COST rather than
+    being pinned on a hazard that isn't there."""
+    out: list[RouteDeviation] = []
+    for cell in simplified_cells:
+        cause_cell = causes.get(cell)
+        if cause_cell is None:
+            continue
+
+        cause_lon, cause_lat = float(lons[cause_cell[1]]), float(lats[cause_cell[0]])
+        bend_lon, bend_lat = float(lons[cell[1]]), float(lats[cell[0]])
+
+        # Only name a hazard the operator can actually see near this bend --
+        # see DEVIATION_MAX_CAUSE_DISTANCE_KM.
+        cause_distance_km = float(haversine_km_array(bend_lon, bend_lat, cause_lon, cause_lat))
+        if cause_distance_km > DEVIATION_MAX_CAUSE_DISTANCE_KM:
+            out.append(
+                RouteDeviation(
+                    longitude=bend_lon,
+                    latitude=bend_lat,
+                    cause_longitude=cause_lon,
+                    cause_latitude=cause_lat,
+                    cause="NAVIGATION_COST",
+                    detail="Higher-cost water than the direct line",
+                )
+            )
+            continue
+
+        sic = float(fields.sic[cause_cell])
+        berg_risk = float(fields.berg_risk[cause_cell])
+        ice_risk = float(fields.ice_risk[cause_cell])
+
+        if bool(land[cause_cell]):
+            out.append(
+                RouteDeviation(
+                    longitude=float(lons[cell[1]]),
+                    latitude=float(lats[cell[0]]),
+                    cause_longitude=cause_lon,
+                    cause_latitude=cause_lat,
+                    cause="LAND",
+                    detail="Landmass / non-navigable cell",
+                )
+            )
+            continue
+
+        # Nearest tracked berg to the offending cell -- reported only when that
+        # berg is genuinely what makes the cell expensive.
+        nearest_id, nearest_km = None, None
+        if snapshot.icebergs:
+            nearest = min(
+                snapshot.icebergs,
+                key=lambda b: float(haversine_km_array(cause_lon, cause_lat, b.lon, b.lat)),
+            )
+            nearest_km = float(haversine_km_array(cause_lon, cause_lat, nearest.lon, nearest.lat))
+            nearest_id = nearest.id
+
+        if berg_risk >= ice_risk and berg_risk >= DEVIATION_MIN_PENALTY and nearest_id is not None:
+            out.append(
+                RouteDeviation(
+                    longitude=float(lons[cell[1]]),
+                    latitude=float(lats[cell[0]]),
+                    cause_longitude=cause_lon,
+                    cause_latitude=cause_lat,
+                    cause="ICEBERG",
+                    detail=f"Iceberg {nearest_id} exclusion zone, {nearest_km:.0f} km",
+                    iceberg_id=nearest_id,
+                    iceberg_distance_km=round(nearest_km, 1),
+                )
+            )
+        elif ice_risk >= DEVIATION_MIN_PENALTY and sic > thresholds.passable_max:
+            out.append(
+                RouteDeviation(
+                    longitude=float(lons[cell[1]]),
+                    latitude=float(lats[cell[0]]),
+                    cause_longitude=cause_lon,
+                    cause_latitude=cause_lat,
+                    cause="SEA_ICE",
+                    detail=f"Sea ice {sic * 100:.0f}% concentration",
+                    sic_pct=round(sic * 100, 1),
+                )
+            )
+        else:
+            out.append(
+                RouteDeviation(
+                    longitude=float(lons[cell[1]]),
+                    latitude=float(lats[cell[0]]),
+                    cause_longitude=cause_lon,
+                    cause_latitude=cause_lat,
+                    cause="NAVIGATION_COST",
+                    detail="Higher-cost water than the direct line",
+                )
+            )
+    return out
 
 
 def _evaluate_route(coords, fm: FieldModel, ice_class: str, thresholds: IceThresholds, snapshot: HazardSnapshot):
@@ -281,69 +503,29 @@ def _evaluate_route(coords, fm: FieldModel, ice_class: str, thresholds: IceThres
     }
 
 
-ROLE_SELECTION = {
-    "low_risk": "the lowest measured risk score",
-    "fast_fuel": "the lowest combined ETA and fuel",
-}
+def _explain(route: RoutePlan, horizon: int) -> list[str]:
+    """Three compact operational lines. Deliberately not a narrative: the
+    Shore panel renders the structured fields, and anything the operator
+    cannot act on (search internals, candidate counts, weight vectors) stays
+    out of the operator-facing text entirely."""
+    si, ib = route.sea_ice_exposure, route.iceberg_exposure
+    when = "now" if horizon == 0 else f"T+{horizon}h"
 
-
-def _explain(route: RoutePlan, peers: list[RoutePlan], horizon: int, weights: RouteWeights) -> list[str]:
-    si, ib, wx = route.sea_ice_exposure, route.iceberg_exposure, route.weather_exposure
-    n = route.candidates_evaluated
-    when = "NOW" if horizon == 0 else f"T+{horizon}h"
-    if route.route_id == "recommended":
-        why = (
-            f"Selected as the best trade-off under the requested weights (risk {weights.risk:.0%} / "
-            f"fuel {weights.fuel:.0%} / ETA {weights.eta:.0%}) among {n} distinct A* candidates, "
-            f"evaluated against hazards at {when}."
-        )
-    else:
-        why = (
-            f"Selected as the candidate with {ROLE_SELECTION[route.route_id]} among the {n - 1} not chosen "
-            f"as RECOMMENDED, evaluated against hazards at {when}."
-        )
     lines = [
         f"{route.distance_km:.0f} km, {route.eta_hours:.0f} h, {route.estimated_fuel.tonnes:.0f} t fuel "
-        f"(PROTOTYPE ESTIMATE); risk {route.risk_score:.2f} ({route.risk_level}), confidence {route.confidence:.0%}.",
-        why,
-        f"Sea ice for {si.vessel_ice_class} (PROTOTYPE PASSABILITY MODEL): {si.passable_pct:.0f}% passable, "
-        f"{si.caution_pct:.0f}% caution, {si.restricted_pct:.0f}% restricted, {si.impassable_pct:.0f}% impassable; "
-        f"mean SIC {si.mean_sic_pct:.0f}%, max {si.max_sic_pct:.0f}% -> {si.assessment}.",
+        f"(prototype estimate); navigation risk {route.risk_level.lower()}.",
+        route.selection_rationale,
     ]
+
     hot = [r for r in ib.relevant_icebergs if r.classification in ("INTERSECTING", "POTENTIAL")]
-    if hot:
-        top = hot[0]
-        lines.append(
-            f"{len(hot)} iceberg(s) may intersect the corridor; closest {top.id} at {top.distance_km:.0f} km "
-            f"(exclusion radius {top.exclusion_radius_km:.0f} km, {top.classification})."
-        )
-    elif ib.relevant_icebergs:
-        top = ib.relevant_icebergs[0]
-        lines.append(f"No projected iceberg intersection; nearest {top.id} at {top.distance_km:.0f} km.")
-    else:
-        lines.append(f"No tracked iceberg within {NEARBY_CORRIDOR_KM:.0f} km of its exclusion zone.")
-    lines.append(
-        f"Peak waves {wx.max_wave_m:.1f} m, peak wind {wx.max_wind_kt:.0f} kt; "
-        f"{wx.high_sea_state_pct:.0f}% of the route in waves >= {HIGH_SEA_STATE_M:.0f} m."
+    ice_part = (
+        f"Sea ice {si.assessment.lower()} for {si.vessel_ice_class} "
+        f"({si.mean_sic_pct:.0f}% mean concentration)"
     )
-    share = route.risk_driver_shares.get(route.primary_risk_driver)
-    lines.append(
-        f"Primary risk driver: {route.primary_risk_driver}"
-        + (f" ({share:.0%} of combined hazard)." if share is not None else ".")
+    berg_part = (
+        f"{len(hot)} iceberg(s) may reach the corridor" if hot else "no iceberg projected to reach the corridor"
     )
-    for p in peers:
-        dd, dt, df = p.distance_km - route.distance_km, p.eta_hours - route.eta_hours, p.estimated_fuel.tonnes - route.estimated_fuel.tonnes
-        lines.append(
-            f"Compared with {p.label}: this route is {-dd:+.0f} km, {-dt:+.0f} h, {-df:+.0f} t fuel, "
-            f"risk {route.risk_score - p.risk_score:+.2f}."
-        )
-    if route.route_id == "recommended":
-        fast = next((p for p in peers if p.route_id == "fast_fuel"), None)
-        if fast and route.distance_km > fast.distance_km and route.risk_score < fast.risk_score:
-            lines.append(
-                f"Accepts +{route.distance_km - fast.distance_km:.0f} km over the fastest route to lower "
-                f"risk score by {fast.risk_score - route.risk_score:.2f}."
-            )
+    lines.append(f"{ice_part}; {berg_part}, evaluated at {when}.")
     return lines
 
 
@@ -396,10 +578,29 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     candidates: list[dict] = []
 
     def add_candidate(result, w: RouteWeights, generation: str) -> bool:
-        lonlat = list(result.path_lonlat)
-        if any(_separation_km(lonlat, c["lonlat"]) < MIN_SEPARATION_KM for c in candidates):
+        # The raw A* path is an 8-connected staircase; simplify it so the only
+        # bends that survive are ones a real environmental cost forced. The
+        # *unsimplified* cells are kept for the k-alternative corridor mask
+        # below, which needs the full swept corridor to push later candidates
+        # away properly.
+        risk_eff = np.clip(_cell_penalty(grid_fields, w), 0.0, MAX_PENALTY)
+        risk_eff[land] = 1.0
+        simple_cells, causes = _simplify_path(
+            result.path_cells, risk_eff, lons, lats, hazard_field=grid_fields.risk
+        )
+        simple_lonlat = [(float(lons[c[1]]), float(lats[c[0]])) for c in simple_cells]
+
+        # Distinctness is judged on the geometry actually displayed and scored,
+        # not on the pre-simplification staircase -- otherwise two candidates
+        # that differ only in lattice noise would both be kept and then present
+        # as identical routes to the operator.
+        if any(_separation_km(simple_lonlat, c["lonlat"]) < MIN_SEPARATION_KM for c in candidates):
             return False
-        coords = [list(origin)] + [[float(lo), float(la)] for lo, la in lonlat] + [list(mission.destination)]
+        lonlat = simple_lonlat
+
+        coords = (
+            [list(origin)] + [[lo, la] for lo, la in simple_lonlat] + [list(mission.destination)]
+        )
         candidates.append(
             {
                 "weights": w,
@@ -407,6 +608,16 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                 "lonlat": lonlat,
                 "cells": result.path_cells,
                 "coords": coords,
+                "deviations": _describe_deviations(
+                    simple_cells,
+                    causes,
+                    lons=lons,
+                    lats=lats,
+                    fields=grid_fields,
+                    land=land,
+                    snapshot=snapshot,
+                    thresholds=thresholds,
+                ),
                 "m": _evaluate_route(coords, fm, vessel.ice_class, thresholds, snapshot),
             }
         )
@@ -420,9 +631,13 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     # k-alternatives: re-run A* with the corridors of ALL routes found so far penalised,
     # so each new route must avoid every earlier one. Real A* routes over the same
     # cost field, just forced away from duplicates.
+    # Simplification collapses candidates that differed only in lattice noise
+    # into the same geometry, so more rounds are needed than the raw searches
+    # suggest to end up with three genuinely distinct corridors.
     balanced = RouteWeights(risk=1 / 3, fuel=1 / 3, eta=1 / 3)
+    risk_led = RouteWeights(risk=0.7, fuel=0.15, eta=0.15)
     for extra in ALT_PENALTIES:
-        for w in (weights, balanced):
+        for w in (weights, balanced, risk_led):
             if len(candidates) >= 6:
                 break
             mask = np.zeros(land.shape, dtype=bool)
@@ -439,34 +654,96 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                 f"weights risk {w.risk:.2f} / fuel {w.fuel:.2f} / ETA {w.eta:.2f}",
             )
 
-    # -- role assignment from measured metrics
+    # -- strategy assignment from measured metrics.
+    #
+    # Navigation risk is applied here as a CONSTRAINT, not as an operator
+    # preference: the engine finds the safest candidate it can, then treats
+    # everything within RISK_ACCEPTANCE_BAND of it as operationally
+    # acceptable. RECOMMENDED and FUEL-EFFICIENT are only ever chosen from
+    # that acceptable set, so neither can trade safety away for speed or fuel.
     def norm(key) -> list[float]:
         vals = [key(c["m"]) for c in candidates]
         lo, hi = min(vals), max(vals)
         return [0.0 if hi - lo < 1e-9 else (v - lo) / (hi - lo) for v in vals]
 
-    n_risk, n_fuel, n_eta = norm(lambda m: m["risk_score"]), norm(lambda m: m["fuel"].tonnes), norm(lambda m: m["eta_hours"])
-    remaining = list(range(len(candidates)))
-    composite = lambda i: weights.risk * n_risk[i] + weights.fuel * n_fuel[i] + weights.eta * n_eta[i]  # noqa: E731
+    n_risk = norm(lambda m: m["risk_score"])
+    n_fuel, n_eta = norm(lambda m: m["fuel"].tonnes), norm(lambda m: m["eta_hours"])
+    risk_of = lambda i: candidates[i]["m"]["risk_score"]  # noqa: E731
+    fuel_of = lambda i: candidates[i]["m"]["fuel"].tonnes  # noqa: E731
+    distance_of = lambda i: candidates[i]["m"]["distance_km"]  # noqa: E731
+
+    all_indices = list(range(len(candidates)))
+    safest_risk = min(risk_of(i) for i in all_indices)
+    acceptance_ceiling = safest_risk + RISK_ACCEPTANCE_BAND
+    acceptable = [i for i in all_indices if risk_of(i) <= acceptance_ceiling]
+
     picks: dict[str, int] = {}
-    picks["recommended"] = min(remaining, key=lambda i: (composite(i), candidates[i]["m"]["distance_km"]))
-    remaining.remove(picks["recommended"])
-    if remaining:
-        picks["low_risk"] = min(remaining, key=lambda i: (n_risk[i], candidates[i]["m"]["distance_km"]))
-        remaining.remove(picks["low_risk"])
-    if remaining:
-        picks["fast_fuel"] = min(remaining, key=lambda i: (n_eta[i] + n_fuel[i], candidates[i]["m"]["distance_km"]))
-    if len(picks) < 3:
-        raise NoRouteFound(f"Could not generate three distinct routes in this domain ({len(candidates)} distinct candidate(s) found).")
+
+    def take(role: str, pool: list[int], key) -> None:
+        """Assigns the best candidate in `pool` to `role`.
+
+        Falls back to the full candidate set when the risk-acceptable pool is
+        exhausted. If every candidate is already claimed -- which happens when
+        the environment genuinely offers fewer distinct corridors than there
+        are strategies, e.g. a leg where the ice gradient is latitudinal and no
+        lateral deviation helps -- the best track for this objective is reused
+        and flagged, rather than manufacturing a detour with no cause.
+        """
+        available = [i for i in pool if i not in picks.values()]
+        if not available:
+            available = [i for i in all_indices if i not in picks.values()]
+        if not available:
+            available = pool or all_indices
+        picks[role] = min(available, key=key)
+
+    # The two single-objective strategies are assigned first, because each has
+    # a hard definition that must actually hold: LOW-RISK really is the
+    # lowest-risk track available, and FUEL-EFFICIENT really is the lowest-burn
+    # one inside the risk constraint. Assigning RECOMMENDED first would let it
+    # take the cheapest candidate and leave FUEL-EFFICIENT burning more fuel
+    # than the route it is supposed to undercut.
+    take("low_risk", all_indices, key=lambda i: (risk_of(i), distance_of(i)))
+    take("fast_fuel", acceptable, key=lambda i: (fuel_of(i), distance_of(i)))
+    # RECOMMENDED is the compromise: minimise the worst normalised regret
+    # across risk, ETA and fuel (Chebyshev / compromise programming), which
+    # lands on a genuinely middle track instead of an extreme. Risk enters
+    # here only as regret *within the already risk-acceptable set* -- the
+    # constraint decides what is allowed, this only balances what is left.
+    take(
+        "recommended",
+        acceptable,
+        key=lambda i: (max(n_risk[i], n_eta[i], n_fuel[i]), n_eta[i] + n_fuel[i], distance_of(i)),
+    )
+
+    # Which strategy first claimed each candidate, so a reused track can say
+    # so. Iterated in assignment order, not display order.
+    first_claim: dict[int, str] = {}
+    for role in ("low_risk", "fast_fuel", "recommended"):
+        first_claim.setdefault(picks[role], role)
 
     routes: list[RoutePlan] = []
     for route_id in ("recommended", "low_risk", "fast_fuel"):
         c = candidates[picks[route_id]]
         m = c["m"]
+        strategy = ROUTE_STRATEGIES[route_id]
         routes.append(
             RoutePlan(
                 route_id=route_id,
-                label=ROLE_LABELS[route_id],
+                label=strategy["label"],
+                objective=strategy["objective"],
+                selection_rationale=strategy["rationale"],
+                risk_acceptability=RiskAcceptability(
+                    risk_score=m["risk_score"],
+                    safest_candidate_risk=round(safest_risk, 3),
+                    band=RISK_ACCEPTANCE_BAND,
+                    within_constraint=m["risk_score"] <= acceptance_ceiling + 1e-9,
+                ),
+                deviations=c["deviations"],
+                shares_track_with=(
+                    ROUTE_STRATEGIES[first_claim[picks[route_id]]]["label"]
+                    if first_claim[picks[route_id]] != route_id
+                    else None
+                ),
                 coordinates=c["coords"],
                 search_weights=c["weights"],
                 distance_km=m["distance_km"],
@@ -484,7 +761,7 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                 generation=c["generation"],
                 candidates_evaluated=len(candidates),
                 provenance={
-                    "route_optimization": "PROTOTYPE — A* OPTIMIZATION (coarse 1° navigation grid); role assigned from measured metrics",
+                    "route_optimization": "PROTOTYPE — A* OPTIMIZATION (coarse 1° navigation grid); strategy assigned from measured metrics under a risk constraint",
                     "fuel": "PROTOTYPE ESTIMATE — distance x vessel consumption x environmental multiplier",
                     "passability": "PROTOTYPE PASSABILITY MODEL — configurable SIC thresholds, not validated",
                     "sea_ice": snapshot.sea_ice_provenance,
@@ -494,8 +771,18 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
             )
         )
 
+    # Trade-offs are measured against RECOMMENDED, so the operator compares
+    # alternatives to the advised route rather than to each other.
+    recommended_route = routes[0]
     for r in routes:
-        r.explanation = _explain(r, [p for p in routes if p is not r], request.horizon_hours, weights)
+        if r.route_id != "recommended":
+            r.tradeoff_vs_recommended = RouteTradeoff(
+                distance_delta_km=round(r.distance_km - recommended_route.distance_km, 1),
+                eta_delta_hours=round(r.eta_hours - recommended_route.eta_hours, 1),
+                fuel_delta_t=round(r.estimated_fuel.tonnes - recommended_route.estimated_fuel.tonnes, 1),
+                risk_delta=round(r.risk_score - recommended_route.risk_score, 3),
+            )
+        r.explanation = _explain(r, request.horizon_hours)
 
     warnings: list[str] = []
     for r in routes:
@@ -505,6 +792,14 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                 f"{r.label}: {si.impassable_pct:.0f}% of the route ({si.impassable_pct / 100 * r.distance_km:.0f} km) "
                 f"is in IMPASSABLE ice (SIC > {thresholds.restricted_max:.0%}) for {si.vessel_ice_class}; "
                 "impassable cells are penalised, not hard-blocked, so the station approach remains reachable."
+            )
+
+    for r in routes:
+        if r.shares_track_with:
+            warnings.append(
+                f"{r.label} follows the same track as {r.shares_track_with}: at this horizon the "
+                "environment offers no distinct corridor that better serves this objective. The "
+                "route is repeated rather than a detour being invented to make it look different."
             )
 
     rec, low, fast = routes

@@ -9,6 +9,10 @@ This document provides a complete audit of all configuration settings and enviro
 
 ## 1. Backend Configuration (`boreas-core/.env`)
 
+**How `.env` is loaded**: `boreas_core/api/server.py` calls `boreas_core.env.load_env_file()` at import, before any credential is read. It is a small dependency-free parser (no `python-dotenv`): it reads `boreas-core/.env`, ignores blank lines and `#` comments, strips optional surrounding quotes, and **never overrides a variable already present in the real environment** — so exported shell vars and container secrets still win. A missing `.env` is not an error.
+
+Without this loader, credentials written into `.env` were invisible to the server (neither `start.sh` nor the app exported them), which made `/satellite/status` report the source as unconfigured even when valid CDSE credentials existed. Set credentials in `boreas-core/.env` *or* export them; either works.
+
 | Variable | Required / Optional | Secret? | Used By | Description |
 |---|---|---|---|---|
 | `VESSELAPI_API_KEY` | Optional | Yes | `boreas_core/vessels/live_lookup.py` | API key for terrestrial-AIS live vessel position lookups via VesselAPI free tier. If omitted, vessel roster defaults to last known home port. |

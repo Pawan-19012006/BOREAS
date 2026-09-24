@@ -51,6 +51,20 @@ def _wall_snapshot(clean, *, lat=(-62.0, -52.0), lon=(-5.0, 40.0), value=0.95):
     return dataclasses.replace(clean, sic=sic)
 
 
+def _midpoint_of(coords) -> tuple[float, float]:
+    """Point half way along a track by distance, interpolated between vertices."""
+    cum = [0.0]
+    for a, b in zip(coords[:-1], coords[1:]):
+        cum.append(cum[-1] + float(haversine_km_array(a[0], a[1], b[0], b[1])))
+    half = cum[-1] / 2
+    i = max(k for k in range(len(cum) - 1) if cum[k] <= half)
+    t = (half - cum[i]) / (cum[i + 1] - cum[i])
+    return (
+        coords[i][0] + (coords[i + 1][0] - coords[i][0]) * t,
+        coords[i][1] + (coords[i + 1][1] - coords[i][1]) * t,
+    )
+
+
 def _fm(snapshot, mission_id="CAPE_TOWN_TO_MAITRI", vessel_ice_class="Arc5 / UL"):
     return FieldModel(snapshot, profile_for_ice_class(vessel_ice_class), DEFAULT_ICE_THRESHOLDS)
 
@@ -90,13 +104,21 @@ def test_routes_start_at_cape_town_and_end_at_station(mission_id):
 def test_three_distinct_valid_routes(mission_id):
     resp = _plan(mission_id)
     assert [r.route_id for r in resp.routes] == ["recommended", "low_risk", "fast_fuel"]
-    assert [r.label for r in resp.routes] == ["RECOMMENDED", "LOW-RISK ALTERNATIVE", "FASTEST / FUEL-ORIENTED"]
+    assert [r.label for r in resp.routes] == ["RECOMMENDED", "LOW-RISK", "FUEL-EFFICIENT"]
     for a in range(3):
         for b in range(a + 1, 3):
-            assert resp.routes[a].coordinates != resp.routes[b].coordinates
-            assert _separation_km(resp.routes[a].coordinates, resp.routes[b].coordinates) >= MIN_SEPARATION_KM
+            ra, rb = resp.routes[a], resp.routes[b]
+            # Two strategies may legitimately land on the same track when the
+            # environment offers no distinct corridor for the second one --
+            # but only when that is declared, never silently.
+            if ra.coordinates == rb.coordinates:
+                assert rb.shares_track_with or ra.shares_track_with
+                continue
+            assert _separation_km(ra.coordinates, rb.coordinates) >= MIN_SEPARATION_KM
     for r in resp.routes:
-        assert len(r.coordinates) > 5
+        # Geometry is simplified to the bends the environment actually forced,
+        # so a clean leg is only a handful of vertices.
+        assert len(r.coordinates) >= 2
         assert r.distance_km > 3000 and r.eta_hours > 100 and r.estimated_fuel.tonnes > 0
         assert r.estimated_fuel.label == "PROTOTYPE ESTIMATE"
         assert 0.0 <= r.risk_score <= 1.0 and 0.0 <= r.confidence <= 1.0
@@ -109,13 +131,67 @@ def test_missions_differ_in_destination_and_geometry():
     assert bharati.routes[0].distance_km > maitri.routes[0].distance_km  # 76E is farther than 12E
 
 
-def test_weights_change_route_characteristics():
-    risk_heavy = _routes(_plan("CAPE_TOWN_TO_BHARATI", 0, (0.9, 0.05, 0.05)))["recommended"]
-    eta_heavy = _routes(_plan("CAPE_TOWN_TO_BHARATI", 0, (0.05, 0.475, 0.475)))["recommended"]
-    assert risk_heavy.coordinates != eta_heavy.coordinates
-    assert risk_heavy.risk_score < eta_heavy.risk_score
-    assert eta_heavy.eta_hours < risk_heavy.eta_hours
-    assert eta_heavy.estimated_fuel.tonnes < risk_heavy.estimated_fuel.tonnes
+# --------------------------------------------------- route strategy semantics ---
+# The three routes are operational strategies chosen by the engine under a risk
+# constraint -- not three settings an operator dials in. These pin the
+# semantics each strategy promises.
+
+
+@pytest.mark.parametrize("mission_id", MISSION_IDS)
+@pytest.mark.parametrize("horizon", [0, 24, 72, 120])
+def test_low_risk_really_is_the_lowest_risk_track(mission_id, horizon):
+    rec, low, fuel = _plan(mission_id, horizon).routes
+    assert low.risk_score <= rec.risk_score + 1e-9
+    assert low.risk_score <= fuel.risk_score + 1e-9
+    assert low.objective == "Minimize navigation risk"
+
+
+@pytest.mark.parametrize("mission_id", MISSION_IDS)
+@pytest.mark.parametrize("horizon", [0, 24, 72, 120])
+def test_fuel_efficient_really_burns_least_fuel(mission_id, horizon):
+    rec, low, fuel = _plan(mission_id, horizon).routes
+    # Unless it is openly sharing another strategy's track because the
+    # environment offers nothing better for this objective.
+    if not fuel.shares_track_with:
+        assert fuel.estimated_fuel.tonnes <= rec.estimated_fuel.tonnes + 1e-6
+    assert fuel.objective == "Minimize estimated fuel consumption"
+
+
+@pytest.mark.parametrize("mission_id", MISSION_IDS)
+@pytest.mark.parametrize("horizon", [0, 24, 72, 120])
+def test_recommended_stays_inside_the_risk_constraint(mission_id, horizon):
+    """Risk is a constraint the engine applies, so the advised route can never
+    trade safety away for speed or fuel."""
+    rec, low, _ = _plan(mission_id, horizon).routes
+    ra = rec.risk_acceptability
+    assert ra.within_constraint
+    assert ra.risk_score <= ra.safest_candidate_risk + ra.band + 1e-9
+    assert ra.safest_candidate_risk == pytest.approx(low.risk_score, abs=1e-3)
+    assert rec.objective == "Balanced operational route"
+
+
+def test_strategies_are_not_driven_by_caller_supplied_weights():
+    """Weights remain in the schema as an internal search-diversification
+    device, but they must not decide which route is recommended -- risk is
+    never an operator preference."""
+    risk_heavy = _plan("CAPE_TOWN_TO_BHARATI", 0, (0.9, 0.05, 0.05)).routes[0]
+    eta_heavy = _plan("CAPE_TOWN_TO_BHARATI", 0, (0.05, 0.475, 0.475)).routes[0]
+    assert risk_heavy.coordinates == eta_heavy.coordinates
+    assert risk_heavy.risk_score == eta_heavy.risk_score
+
+
+def test_tradeoffs_are_measured_against_the_recommended_route():
+    rec, low, fuel = _plan("CAPE_TOWN_TO_BHARATI").routes
+    assert rec.tradeoff_vs_recommended is None
+    for alt in (low, fuel):
+        t = alt.tradeoff_vs_recommended
+        assert t is not None
+        assert t.eta_delta_hours == pytest.approx(alt.eta_hours - rec.eta_hours, abs=0.05)
+        assert t.fuel_delta_t == pytest.approx(
+            alt.estimated_fuel.tonnes - rec.estimated_fuel.tonnes, abs=0.05
+        )
+        assert t.risk_delta == pytest.approx(alt.risk_score - rec.risk_score, abs=1e-3)
+        assert t.distance_delta_km == pytest.approx(alt.distance_km - rec.distance_km, abs=0.05)
 
 
 # ----------------------------------------------------- hazards affect routing ---
@@ -140,7 +216,11 @@ def test_iceberg_forecast_affects_routing():
     clean = _clean_snapshot()
     req = MissionPlanRequest(mission_id="CAPE_TOWN_TO_MAITRI")
     rec_clean = _routes(plan_mission(req, snapshot=clean))["recommended"]
-    mid_lon, mid_lat = rec_clean.coordinates[len(rec_clean.coordinates) // 2]
+    # Geographic midpoint by distance along the track. Indexing the middle
+    # *vertex* would not do: simplified routes have only a handful of
+    # vertices, and coordinates[len//2] lands near the destination -- which
+    # would plant the berg on the station itself, where no route can avoid it.
+    mid_lon, mid_lat = _midpoint_of(rec_clean.coordinates)
     berg = BergHazard(
         id="TEST-1", name="Injected", lon=mid_lon, lat=mid_lat, risk_level="critical",
         physical_radius_km=25.0, uncertainty_radius_km=20.0, confidence=0.9,
@@ -202,16 +282,20 @@ def test_metrics_and_explanations_are_consistent(mission_id):
         text = " ".join(r.explanation)
         assert f"{r.distance_km:.0f} km" in text and f"{r.eta_hours:.0f} h" in text
         assert f"{r.estimated_fuel.tonnes:.0f} t fuel" in text
-        assert f"{r.risk_score:.2f}" in text and r.primary_risk_driver in text
-        assert f"{si.max_sic_pct:.0f}%" in text and si.assessment in text
-        assert "PROTOTYPE" in text
+        assert r.risk_level.lower() in text
+        assert si.assessment.lower() in text
+        assert r.selection_rationale in text
+        # Operator-facing text carries no search internals.
+        for jargon in ("A*", "candidate", "weights", "corridors penalised"):
+            assert jargon not in text
     levels = {"VERY LOW": 0.10, "LOW": 0.25, "MEDIUM": 0.45, "HIGH": 0.65}
     for r in resp.routes:
         assert r.risk_level == next((k for k, hi in levels.items() if r.risk_score < hi), "CRITICAL")
+    # Route-to-route comparison is now a structured field, not prose the
+    # operator has to parse out of a paragraph.
     rec = _routes(resp)["recommended"]
-    assert any("Compared with LOW-RISK ALTERNATIVE" in line for line in rec.explanation)
-    w = resp.weights  # explanation quotes the caller's weights, not the generating search's
-    assert f"risk {w.risk:.0%} / fuel {w.fuel:.0%} / ETA {w.eta:.0%}" in " ".join(rec.explanation)
+    assert rec.tradeoff_vs_recommended is None
+    assert all(r.tradeoff_vs_recommended is not None for r in resp.routes if r.route_id != "recommended")
 
 
 def test_low_risk_and_fast_roles_reflect_measured_metrics():

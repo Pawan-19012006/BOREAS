@@ -10,6 +10,14 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+# Must run before anything reads credentials from the environment: nothing
+# else loads boreas-core/.env, so without this every configured credential is
+# invisible to the service and the satellite subsystem reports itself
+# unconfigured while the operator's .env sits there populated.
+from boreas_core.env import load_env_file
+
+load_env_file()
+
 from boreas_core.data.synthetic_drift import FEATURE_COLUMNS
 from boreas_core.explain.rationale import generate_drift_rationale, generate_route_rationale
 from boreas_core.fusion.indian_data import IndianDataFusionLayer
@@ -19,7 +27,7 @@ from boreas_core.physics.forces import net_acceleration
 from boreas_core.routing.directions import build_route_legs
 from boreas_core.routing.grid import synthetic_southern_ocean_grid
 from boreas_core.satellite.quicklook import get_quicklook
-from boreas_core.satellite.status import get_all_statuses
+from boreas_core.satellite.status import get_source_status
 from boreas_core.observe import (
     IcebergsObserveResponse,
     VesselsObserveResponse,
@@ -63,6 +71,7 @@ from boreas_core.vessels.roster import ROSTER
 
 from .schemas import (
     DriftForecastRequest,
+    SatelliteObservation,
     DriftForecastResponse,
     EdgeReportResponse,
     EnsembleGridResponse,
@@ -288,17 +297,43 @@ def _legs_out(legs) -> list[RouteLegOut]:
 
 
 @app.get("/satellite/status", response_model=SatelliteStatusResponse)
-def satellite_status() -> SatelliteStatusResponse:
-    """Real, env-var-gated connectivity status for the satellite tile
-    sources that need credentials (Sentinel-1/2 via CDSE, Copernicus Marine)
-    -- see boreas_core/satellite/status.py. NASA Worldview/GIBS is keyless
-    and not included here; the frontend treats any source missing from this
-    map as connected.
+def satellite_status(refresh: bool = False) -> SatelliteStatusResponse:
+    """Connectivity status proven by a real provider request, not inferred
+    from whether credentials happen to be set -- see
+    boreas_core/satellite/status.py. CONNECTED means an actual CDSE request
+    succeeded during the probe, and carries the observation provenance
+    (product id, acquisition time, footprint) that proves it. NASA
+    Worldview/GIBS is keyless and not included here; the frontend treats any
+    source missing from this map as connected.
+
+    `refresh=true` bypasses the probe cache.
     """
-    statuses = get_all_statuses()
+    statuses = {
+        source_id: get_source_status(source_id, force=refresh)
+        for source_id in ("sentinel-1", "sentinel-2", "copernicus-marine")
+    }
     return SatelliteStatusResponse(
         sources={
-            source_id: SatelliteSourceStatus(connected=status.connected, reason=status.reason)
+            source_id: SatelliteSourceStatus(
+                state=status.state,
+                reason=status.reason,
+                provider=status.provider,
+                credentials_configured=status.credentials_configured,
+                imagery_available=status.imagery_available,
+                checked_at=status.checked_at,
+                connected=status.connected,
+                observation=(
+                    SatelliteObservation(
+                        product_id=status.observation.product_id,
+                        acquired_at=status.observation.acquired_at,
+                        bbox=status.observation.bbox,
+                        collection=status.observation.collection,
+                        extra=status.observation.extra,
+                    )
+                    if status.observation
+                    else None
+                ),
+            )
             for source_id, status in statuses.items()
         }
     )

@@ -58,6 +58,9 @@ export interface MissionPlanRequest {
   mission_id: MissionId;
   vessel_id?: string;
   horizon_hours: number;
+  /** Internal search-diversification knob. Deliberately not exposed in the
+   *  Shore UI: navigation risk is a constraint the route engine applies, not
+   *  an operator preference, so the operator never tunes weights. */
   weights?: RouteWeights;
   ice_thresholds?: {
     passable_max: number;
@@ -131,9 +134,49 @@ export interface WeatherExposure {
 
 export type RiskLevel = 'VERY LOW' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
+/** Route-to-route comparison, always measured against RECOMMENDED. Deltas are
+ *  `this - recommended`, so a positive eta_delta_hours means slower. */
+export interface RouteTradeoff {
+  distance_delta_km: number;
+  eta_delta_hours: number;
+  fuel_delta_t: number;
+  risk_delta: number;
+}
+
+/** Navigation risk as an engine-applied constraint, not a user preference. */
+export interface RiskAcceptability {
+  risk_score: number;
+  safest_candidate_risk: number;
+  band: number;
+  within_constraint: boolean;
+}
+
+export type DeviationCause = 'SEA_ICE' | 'ICEBERG' | 'LAND' | 'NAVIGATION_COST';
+
+/** A bend the route genuinely needed, plus the environmental cost that caused
+ *  it. The backend only emits these where a shortcut was actually rejected, so
+ *  a deviation is never a hazard invented to justify existing geometry. */
+export interface RouteDeviation {
+  longitude: number;
+  latitude: number;
+  cause_longitude: number;
+  cause_latitude: number;
+  cause: DeviationCause;
+  detail: string;
+  sic_pct: number | null;
+  iceberg_id: string | null;
+  iceberg_distance_km: number | null;
+}
+
 export interface RoutePlan {
   route_id: RouteId;
   label: string;
+  objective: string;
+  selection_rationale: string;
+  risk_acceptability: RiskAcceptability;
+  tradeoff_vs_recommended: RouteTradeoff | null;
+  deviations: RouteDeviation[];
+  shares_track_with: string | null;
   coordinates: [number, number][];
   search_weights: RouteWeights;
   distance_km: number;

@@ -132,11 +132,16 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
 
 ---
 
-### 4. Satellite Credential Status
+### 4. Satellite Provider Status
 - **Method**: `GET`
 - **Path**: `/satellite/status`
-- **Purpose**: Checks whether credentials for Copernicus Data Space (CDSE) and Copernicus Marine are present in the server's environment.
-- **Request**: None.
+- **Purpose**: Reports, per source, whether a **real provider request actually succeeded**. Having credentials in the environment is never reported as connected on its own — the server performs a live CDSE token request plus a STAC metadata search and only then reports `CONNECTED`.
+- **Request**: optional query parameter `refresh` (`bool`, default `false`) bypasses the probe cache (success TTL 15 min, failure TTL 60 s).
+- **States** (`state` field):
+  - `CONNECTED` — a real provider request succeeded in this process.
+  - `NOT_CONFIGURED` — credentials absent; nothing was attempted.
+  - `CONNECTION_ERROR` — credentials present but the provider request failed.
+  - `DEMO` — the source has no live integration; displayed data is simulated.
 - **Response**:
   - Status: `200 OK`
   - Schema (`SatelliteStatusResponse`):
@@ -144,22 +149,37 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
     {
       "sources": {
         "sentinel-1": {
+          "state": "CONNECTED",
           "connected": true,
-          "reason": "Copernicus Data Space Ecosystem credentials configured"
-        },
-        "sentinel-2": {
-          "connected": true,
-          "reason": "Copernicus Data Space Ecosystem credentials configured"
+          "provider": "Copernicus Data Space Ecosystem",
+          "credentials_configured": true,
+          "imagery_available": true,
+          "checked_at": "2026-09-24T10:12:03Z",
+          "reason": "Live CDSE metadata request succeeded.",
+          "observation": {
+            "product_id": "S1D_EW_GRDM_1SDH_20260923T145534_...",
+            "collection": "SENTINEL-1",
+            "acquired_at": "2026-09-23T14:55:34Z",
+            "requested_at": "2026-09-24T10:12:03Z",
+            "bbox": [-10.0, -71.0, 95.0, -33.0]
+          }
         },
         "copernicus-marine": {
+          "state": "DEMO",
           "connected": false,
-          "reason": "COPERNICUSMARINE_SERVICE_USERNAME / COPERNICUSMARINE_SERVICE_PASSWORD not configured (see .env.example)"
+          "provider": "Copernicus Marine Service",
+          "credentials_configured": false,
+          "imagery_available": false,
+          "checked_at": null,
+          "reason": "No lightweight metadata probe exists for this source; displayed fields are simulated.",
+          "observation": null
         }
       }
     }
     ```
-- **Implementation File**: `boreas_core/api/server.py:198`
-- **Dependencies**: `boreas_core.satellite.status.get_all_statuses`
+- **`observation`** is `null` whenever no real product was retrieved; fields are never filled with placeholder values.
+- **Implementation File**: `boreas_core/api/server.py`
+- **Dependencies**: `boreas_core.satellite.status.get_source_status`, `boreas_core.satellite.cdse_auth`, `boreas_core.satellite.stac`, `boreas_core.env.load_env_file`
 
 ---
 
@@ -599,11 +619,17 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
   - `mission_id`: `CAPE_TOWN_TO_BHARATI` | `CAPE_TOWN_TO_MAITRI`.
   - `vessel_id` (optional): an id from `/observe/vessels`; defaults per mission (Golovnin → Bharati, Papanin → Maitri). Its `ice_class` selects the constraint profile (cruise speed, base fuel t/km, ice risk/resistance scale).
   - `horizon_hours`: `0, 12, 24, 48, 72, 96, 120`. The forecast hazard state (sea ice, iceberg positions + uncertainty, environment) at T+horizon is applied to the whole transit.
-  - `weights` (optional): non-negative, normalised server-side; drive the RECOMMENDED pick.
+  - `weights` (optional): **internal search-diversification only, not an operator control.** They seed the A* candidate pool; they do NOT choose which candidate becomes RECOMMENDED. Strategy assignment is made afterwards from the *measured* route metrics. The Shore UI no longer sends this field and exposes no risk/fuel/ETA sliders — navigation risk is a constraint the engine applies, never a preference an operator tunes.
   - `ice_thresholds` (optional): SIC bounds for PASSABLE/CAUTION/RESTRICTED (above → IMPASSABLE).
   - `start_lon` / `start_lat` (optional, must be supplied together): overrides the mission's fixed origin (e.g. Cape Town) with a custom start point — an underway replan from the vessel's actual current position. Reuses the same A* engine and navigation domain; not a second routing path. When set, the response's `origin_name` reads `"Current position (lat, lon)"` instead of the mission's port name. Used by the shore↔ship coordination workflow (`/coordination/simulate-environment-change`); see Level 04 below.
+- **Route strategies**: the three routes are three *operational strategies*, assigned from measured metrics, not from the caller's weights:
+  - `recommended` → **RECOMMENDED**: best balanced ETA/fuel compromise (Chebyshev) among risk-acceptable candidates.
+  - `low_risk` → **LOW-RISK**: the lowest measured risk score available on the leg (no constraint — it *is* the safest).
+  - `fast_fuel` → **FUEL-EFFICIENT**: lowest estimated fuel burn among risk-acceptable candidates. The `route_id` stays `fast_fuel` so existing coordination contracts keep working.
+  A candidate is risk-acceptable when its risk score is within `RISK_ACCEPTANCE_BAND` (0.08) of the safest candidate found. The band is relative, so the constraint is always feasible. When the environment offers fewer distinct corridors than strategies, a route may reuse another's track and reports `shares_track_with` plus a warning rather than a fabricated detour.
+- **Route geometry**: A* output is string-pulled after the search, preserving A*'s own path cost. Straight-line shortcuts through uniform water are taken, so 8-connected lattice staircase artefacts collapse; a bend only survives when the direct line was genuinely more expensive (ice, an iceberg exclusion zone, land). Each surviving bend records the cell that blocked the shortcut, which is what `deviations` reports. A cause further than `DEVIATION_MAX_CAUSE_DISTANCE_KM` (400 km) from its bend is downgraded to `NAVIGATION_COST` rather than labelled with a hazard the operator cannot see nearby.
 - **Response** (`MissionPlanResponse`): `mission_id`, `mission_label`, `vessel`, `horizon_hours`, normalised `weights`, `ice_thresholds`, `domain` (bounds, resolution, origin/destination snap km), `warnings`, and `routes` — always three, ordered `recommended`, `low_risk`, `fast_fuel`. Each route (`RoutePlan`):
-  `route_id`, `label`, `coordinates` (`[lon, lat]`, exact origin → exact destination), `distance_km`, `eta_hours`, `estimated_fuel` (`tonnes`, `label: "PROTOTYPE ESTIMATE"`, `consumption_t_per_km`, `environmental_multiplier`), `risk_score` (0–1) + `risk_level`, `confidence`, `sea_ice_exposure` (mean/max SIC, passable/caution/restricted/impassable %, `ice_exposure_km`, `assessment`), `iceberg_exposure` (counts + `relevant_icebergs` classified INTERSECTING/POTENTIAL/NEARBY with distance, exclusion radius, closest-approach ETA, plus `horizon_hours` on the exposure object itself), `weather_exposure`, `primary_risk_driver` (+ `risk_driver_shares`), `explanation` (strings built from the route's own metrics), `search_weights`, `generation`, `candidates_evaluated`, `provenance`.
+  `route_id`, `label`, `coordinates` (`[lon, lat]`, exact origin → exact destination), `distance_km`, `eta_hours`, `estimated_fuel` (`tonnes`, `label: "PROTOTYPE ESTIMATE"`, `consumption_t_per_km`, `environmental_multiplier`), `risk_score` (0–1) + `risk_level`, `confidence`, `sea_ice_exposure` (mean/max SIC, passable/caution/restricted/impassable %, `ice_exposure_km`, `assessment`), `iceberg_exposure` (counts + `relevant_icebergs` classified INTERSECTING/POTENTIAL/NEARBY with distance, exclusion radius, closest-approach ETA, plus `horizon_hours` on the exposure object itself), `weather_exposure`, `primary_risk_driver` (+ `risk_driver_shares`), `explanation` (strings built from the route's own metrics), `objective` (what this strategy minimises), `selection_rationale`, `risk_acceptability` (`acceptable`, `risk_score`, `safest_risk_score`, `band`), `tradeoff_vs_recommended` (signed `distance_km`/`eta_hours`/`fuel_tonnes`/`risk_score` deltas; `null` on the recommended route itself), `deviations` (per retained bend: `longitude`/`latitude`, `cause_longitude`/`cause_latitude`, `cause` ∈ `SEA_ICE`/`ICEBERG`/`LAND`/`NAVIGATION_COST`, `detail`, plus `sic_pct`/`iceberg_id`/`iceberg_distance_km` where applicable), `shares_track_with`, `search_weights`, `generation`, `candidates_evaluated`, `provenance`.
 - **Errors**: `422` invalid mission/horizon/weights/thresholds/start position or no route; `404` unknown `vessel_id`.
 - **Implementation Files**: `boreas_core/mission/` (`planner.py`, `fields.py`, `config.py`, `models.py`), route handler in `api/server.py`.
 

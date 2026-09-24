@@ -1,8 +1,16 @@
-// Route comparison and the case for the recommendation.
+// Route comparison: what the operator needs to choose between three routes,
+// and nothing else.
 //
-// Every figure and every line of reasoning comes from the backend's own
-// RoutePlan. The panel's job is hierarchy and legibility, not analysis: it
-// does not re-rank routes, re-score risk, or compose its own justification.
+// Deliberately narrow. Every figure comes from the backend's own RoutePlan --
+// this panel does not re-rank, re-score, or compose its own justification. It
+// answers, in order: which route is this, why did BOREAS pick it, what does it
+// cost (ETA / fuel), what will the vessel meet (risk, ice, icebergs, weather),
+// and what does choosing it cost against the recommended route.
+//
+// What is deliberately NOT here: search internals (candidate counts, weight
+// vectors, corridor penalties), repeated environmental prose, and generic
+// planner notes. None of it helps an operator choose between routes, and its
+// presence made the panel read as generated filler.
 
 import { ICE_BAND_COLORS } from '../../layers/SeaIceLayer';
 import { HAZARD_COLORS } from '../../layers/RouteHazardLayer';
@@ -11,6 +19,7 @@ import { classificationLabel, levelLabel, sentenceCase } from '../../lib/format'
 import type {
   MissionPlanResponse,
   RelevantIceberg,
+  RouteDeviation,
   RouteId,
   RoutePlan,
 } from '../../services/missionApi';
@@ -25,6 +34,19 @@ interface RouteOptionsPanelProps {
   onBack: () => void;
 }
 
+function DeltaTag({ value, unit }: { value: number; unit: string }) {
+  // Lower is better for all three of ETA, fuel and risk.
+  const sense = Math.abs(value) < 1e-9 ? 'flat' : value < 0 ? 'better' : 'worse';
+  const sign = value > 0 ? '+' : '';
+  return (
+    <span className="delta-tag" data-sense={sense}>
+      {sign}
+      {value.toFixed(unit === 'risk' ? 2 : 0)}
+      {unit !== 'risk' && unit}
+    </span>
+  );
+}
+
 function RouteCard({
   route,
   isSelected,
@@ -34,6 +56,12 @@ function RouteCard({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const ice = route.sea_ice_exposure;
+  const hotBergs = route.iceberg_exposure.relevant_icebergs.filter(
+    (b) => b.classification === 'INTERSECTING' || b.classification === 'POTENTIAL',
+  ).length;
+  const t = route.tradeoff_vs_recommended;
+
   return (
     <button
       type="button"
@@ -46,6 +74,7 @@ function RouteCard({
         <span className="route-card-name">{sentenceCase(route.label)}</span>
         {route.route_id === 'recommended' && <span className="tag tag-recommended">Advised</span>}
       </div>
+      <div className="route-objective">{route.objective}</div>
 
       <div className="metric-row">
         <div className="metric">
@@ -57,7 +86,7 @@ function RouteCard({
         </div>
         <div className="metric">
           <div className="metric-value">{formatDuration(route.eta_hours)}</div>
-          <div className="metric-label">Transit</div>
+          <div className="metric-label">ETA</div>
         </div>
         <div className="metric">
           <div className="metric-value">
@@ -68,13 +97,37 @@ function RouteCard({
         </div>
       </div>
 
-      <div className="route-card-foot">
+      <div className="exposure-row">
         <span className="risk-chip" data-level={route.risk_level}>
           {levelLabel(route.risk_level)} risk
         </span>
-        <span>Ice: {route.sea_ice_exposure.assessment.toLowerCase()}</span>
-        <span style={{ marginLeft: 'auto' }}>{(route.confidence * 100).toFixed(0)}% confidence</span>
+        <span className="exposure-item">
+          <span className="swatch" style={{ background: ICE_BAND_COLORS[ice.assessment] }} />
+          Ice {ice.mean_sic_pct.toFixed(0)}%
+        </span>
+        <span className="exposure-item">
+          {hotBergs === 0 ? 'No icebergs' : `${hotBergs} iceberg${hotBergs > 1 ? 's' : ''}`}
+        </span>
+        <span className="exposure-item">{route.weather_exposure.max_wave_m.toFixed(1)} m seas</span>
       </div>
+
+      {/* The cost of choosing this instead of the advised route, on the card
+          itself -- that comparison is the whole decision. */}
+      {t && (
+        <div className="tradeoff-row">
+          <span className="tradeoff-label">vs recommended</span>
+          <DeltaTag value={t.eta_delta_hours} unit="h" />
+          <DeltaTag value={t.fuel_delta_t} unit="t" />
+          <DeltaTag value={t.risk_delta} unit="risk" />
+        </div>
+      )}
+
+      {route.shares_track_with && (
+        <div className="route-shared-note">
+          Same track as {sentenceCase(route.shares_track_with)} &mdash; no distinct corridor serves
+          this objective here.
+        </div>
+      )}
     </button>
   );
 }
@@ -108,7 +161,6 @@ function IceExposure({ route }: { route: RoutePlan }) {
             ),
         )}
       </div>
-
       <div className="ice-legend">
         {bands.map((b) => (
           <span key={b.key} className="ice-legend-item">
@@ -117,7 +169,6 @@ function IceExposure({ route }: { route: RoutePlan }) {
           </span>
         ))}
       </div>
-
       <dl style={{ margin: 'var(--space-3) 0 0' }}>
         <div className="data-row">
           <dt>Assessment for {ice.vessel_ice_class}</dt>
@@ -150,11 +201,10 @@ function HazardList({
   if (icebergs.length === 0) {
     return (
       <p className="field-hint" style={{ margin: 0 }}>
-        No tracked iceberg lies within reach of this corridor at the selected horizon.
+        No tracked iceberg lies within reach of this corridor.
       </p>
     );
   }
-
   return (
     <div>
       {icebergs.map((berg) => (
@@ -172,13 +222,39 @@ function HazardList({
           <span style={{ minWidth: 0 }}>
             <span className="hazard-name">{berg.id}</span>
             <span className="hazard-meta">
-              {classificationLabel(berg.classification)} &middot;{' '}
-              {berg.risk_level.toLowerCase()} &middot; closest at{' '}
+              {classificationLabel(berg.classification)} &middot; closest at{' '}
               {formatDuration(berg.closest_approach_eta_h)}
             </span>
           </span>
           <span className="hazard-distance">{berg.distance_km.toFixed(0)} km</span>
         </button>
+      ))}
+    </div>
+  );
+}
+
+/** Why the track bends where it does. Each entry is a shortcut the route
+ *  engine actually rejected, plus the hazard that made it too expensive -- so
+ *  a bend in open water either has a named cause or the geometry was
+ *  straightened instead of a reason being invented for it. */
+function DeviationList({ deviations }: { deviations: RouteDeviation[] }) {
+  const named = deviations.filter((d) => d.cause !== 'NAVIGATION_COST');
+  if (named.length === 0) {
+    return (
+      <p className="field-hint" style={{ margin: 0 }}>
+        This track runs direct &mdash; no hazard forced it off the straight line.
+      </p>
+    );
+  }
+  return (
+    <div>
+      {named.map((d, i) => (
+        <div key={i} className="deviation-item">
+          <span className="deviation-cause" data-cause={d.cause}>
+            {d.cause.replace('_', ' ').toLowerCase()}
+          </span>
+          <span className="deviation-detail">{d.detail}</span>
+        </div>
       ))}
     </div>
   );
@@ -195,6 +271,7 @@ export const RouteOptionsPanel = ({
 }: RouteOptionsPanelProps) => {
   const selected = plan.routes.find((r) => r.route_id === selectedRouteId) ?? plan.routes[0];
   const weather = selected.weather_exposure;
+  const ra = selected.risk_acceptability;
 
   return (
     <aside className="panel" aria-label="Route options">
@@ -221,21 +298,36 @@ export const RouteOptionsPanel = ({
 
         <section className="panel-section">
           <p className="section-label">Why this route</p>
-          <ul className="explain-list">
-            {selected.explanation.map((line, i) => (
-              <li key={i} className="explain-item">
-                {line}
-              </li>
-            ))}
-          </ul>
+          <p className="why-selected">{selected.selection_rationale}</p>
+          <dl style={{ margin: 'var(--space-3) 0 0' }}>
+            <div className="data-row">
+              <dt>Navigation risk</dt>
+              <dd>
+                {ra.risk_score.toFixed(2)} &middot; {levelLabel(selected.risk_level)}
+              </dd>
+            </div>
+            <div className="data-row">
+              <dt>Risk limit for this leg</dt>
+              <dd>
+                {(ra.safest_candidate_risk + ra.band).toFixed(2)}{' '}
+                {ra.within_constraint ? '(within)' : '(exceeded)'}
+              </dd>
+            </div>
+            <div className="data-row">
+              <dt>Arrival, if departing now</dt>
+              <dd>{etaTimestamp(selected.eta_hours)}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section className="panel-section">
+          <p className="section-label">Why the track bends</p>
+          <DeviationList deviations={selected.deviations} />
         </section>
 
         <section className="panel-section">
           <p className="section-label">Sea ice along track</p>
           <IceExposure route={selected} />
-          <p className="provenance" style={{ marginTop: 'var(--space-3)' }}>
-            {selected.sea_ice_exposure.model} &middot; {selected.provenance.sea_ice}
-          </p>
         </section>
 
         <section className="panel-section">
@@ -270,10 +362,6 @@ export const RouteOptionsPanel = ({
               <dd>{weather.high_sea_state_pct.toFixed(0)}% of track</dd>
             </div>
             <div className="data-row">
-              <dt>Air temperature</dt>
-              <dd>{weather.air_temp_c.toFixed(1)} &deg;C</dd>
-            </div>
-            <div className="data-row">
               <dt>Visibility</dt>
               <dd>{weather.min_visibility_nm.toFixed(1)} NM</dd>
             </div>
@@ -292,12 +380,8 @@ export const RouteOptionsPanel = ({
               <dd>{selected.estimated_fuel.consumption_t_per_km.toFixed(3)} t/km</dd>
             </div>
             <div className="data-row">
-              <dt>Environmental factor</dt>
+              <dt>Ice / weather factor</dt>
               <dd>&times;{selected.estimated_fuel.environmental_multiplier.toFixed(2)}</dd>
-            </div>
-            <div className="data-row">
-              <dt>Arrival, if departing now</dt>
-              <dd>{etaTimestamp(selected.eta_hours)}</dd>
             </div>
           </dl>
           <p className="provenance" style={{ marginTop: 'var(--space-3)' }}>
@@ -305,9 +389,12 @@ export const RouteOptionsPanel = ({
           </p>
         </section>
 
+        {/* Kept because these are operational constraints the operator must
+            know about (e.g. a leg that crosses impassable ice), not planner
+            chatter. */}
         {plan.warnings.length > 0 && (
           <section className="panel-section">
-            <p className="section-label">Planner notices</p>
+            <p className="section-label">Operational notices</p>
             {plan.warnings.map((w, i) => (
               <div key={i} className="notice notice-warn" style={{ marginBottom: 8 }}>
                 <span>{w}</span>
@@ -315,16 +402,6 @@ export const RouteOptionsPanel = ({
             ))}
           </section>
         )}
-
-        <section className="panel-section">
-          <p className="provenance">
-            {selected.provenance.route_optimization}
-            <br />
-            {selected.generation} &middot; chosen from {selected.candidates_evaluated} candidates
-            <br />
-            {plan.domain.note}
-          </p>
-        </section>
       </div>
 
       <div className="panel-footer">

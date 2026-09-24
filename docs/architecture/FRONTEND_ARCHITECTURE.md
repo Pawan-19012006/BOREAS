@@ -161,8 +161,23 @@ explorer-only layers that remain unmounted still use the naive pattern.
 
 - `components/mission/MapLayerControls.tsx`: Google-Maps-style pills (Routes / Icebergs / Sea ice
   / Satellite) directly over the globe, each toggling exactly one existing layer's `visible` prop
-  — no new rendering logic. Satellite shows a real, backend-checked `Real · CDSE` / `Not connected`
-  tag from `useSatelliteStatus`, never a hardcoded "live" label.
+  — no new rendering logic. Satellite shows the backend-probed four-state tag from
+  `useSatelliteStatus` (`Real · CDSE` / `Demo mode` / `Not configured` / `Connection error`), which
+  reflects whether a real provider request actually succeeded — never a hardcoded "live" label and
+  never inferred from the presence of credentials. A `Data sources` pill opens
+  `components/mission/DataProvenancePanel.tsx`, which states each environmental layer's source and
+  REAL/DERIVED/SIMULATED/DEMO mode, shows the satellite product id, acquisition time, collection
+  and footprint CDSE actually returned (omitting fields that have no real value rather than
+  inventing them), and offers a `Re-check provider` button hitting `/satellite/status?refresh=true`.
+- `components/mission/RouteOptionsPanel.tsx`: the three strategy cards. Each states its objective
+  (what it minimises), ETA, fuel, risk, ice/iceberg/sea exposure, and its signed trade-off against
+  RECOMMENDED. There are **no risk/fuel/ETA sliders** — navigation risk is a constraint the engine
+  applies, not an operator preference — and every displayed value comes from the `/mission/plan`
+  response. "Why the track bends" lists the route's `deviations`, filtering out `NAVIGATION_COST`
+  so no bend is given a hazard explanation it does not have.
+- `layers/RouteDeviationLayer.tsx`: draws each named deviation on the globe — a bend marker, a
+  dashed leader line to the cell that caused it, and the cause label. `NAVIGATION_COST` deviations
+  are skipped, so a bend is only annotated when there is a real, nearby hazard to point at.
 - `components/mission/IcebergInspector.tsx`: floating card for a clicked iceberg (via the existing
   `useSelectedEntity` hook), showing current position/drift, +12/24/48h forecast points, and
   distance to the selected route (the backend's own figure when the berg is one of the route's
@@ -268,7 +283,7 @@ The frontend uses **React Context-free local and lifted hook state**. State is o
 | `liveDrift` | `useLiveMissionData` | Dictionary of live drift forecast responses keyed by iceberg ID. Polled every 60 seconds. |
 | `liveRoutes` | `useLiveMissionData` | Dictionary of live route plan responses keyed by vessel ID. Polled every 60 seconds. |
 | `ensembleGrid` | `useEnsembleGrid` | 2D matrices of sea-ice concentration mean and uncertainty standard deviation. |
-| `statuses` | `useSatelliteStatus` | Connectivity status dictionary for credential-gated satellite feeds (`sentinel-1`, `sentinel-2`, `copernicus-marine`). |
+| `statuses` | `useSatelliteStatus` | Per-source probed state (`CONNECTED`/`DEMO`/`NOT_CONFIGURED`/`CONNECTION_ERROR`) plus provider, `checked_at` and the real `observation` provenance, for `sentinel-1`, `sentinel-2`, `copernicus-marine`. Exposes `refresh()` for a forced re-probe. |
 | `backendState` | `useBackendStatus` | Health probe state (`checking`, `online`, `offline`) polled every 15 seconds against `/boreas-api/health`. |
 | `cameraState` | `useCameraState` | Real-time latitude, longitude, altitude, heading, pitch, and roll read from `viewer.camera`. |
 
