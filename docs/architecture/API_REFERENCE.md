@@ -601,7 +601,35 @@ This document specifies all endpoints implemented in the `boreas-core` FastAPI g
   - `horizon_hours`: `0, 12, 24, 48, 72, 96, 120`. The forecast hazard state (sea ice, iceberg positions + uncertainty, environment) at T+horizon is applied to the whole transit.
   - `weights` (optional): non-negative, normalised server-side; drive the RECOMMENDED pick.
   - `ice_thresholds` (optional): SIC bounds for PASSABLE/CAUTION/RESTRICTED (above → IMPASSABLE).
+  - `start_lon` / `start_lat` (optional, must be supplied together): overrides the mission's fixed origin (e.g. Cape Town) with a custom start point — an underway replan from the vessel's actual current position. Reuses the same A* engine and navigation domain; not a second routing path. When set, the response's `origin_name` reads `"Current position (lat, lon)"` instead of the mission's port name. Used by the shore↔ship coordination workflow (`/coordination/simulate-environment-change`); see Level 04 below.
 - **Response** (`MissionPlanResponse`): `mission_id`, `mission_label`, `vessel`, `horizon_hours`, normalised `weights`, `ice_thresholds`, `domain` (bounds, resolution, origin/destination snap km), `warnings`, and `routes` — always three, ordered `recommended`, `low_risk`, `fast_fuel`. Each route (`RoutePlan`):
-  `route_id`, `label`, `coordinates` (`[lon, lat]`, exact origin → exact destination), `distance_km`, `eta_hours`, `estimated_fuel` (`tonnes`, `label: "PROTOTYPE ESTIMATE"`, `consumption_t_per_km`, `environmental_multiplier`), `risk_score` (0–1) + `risk_level`, `confidence`, `sea_ice_exposure` (mean/max SIC, passable/caution/restricted/impassable %, `ice_exposure_km`, `assessment`), `iceberg_exposure` (counts + `relevant_icebergs` classified INTERSECTING/POTENTIAL/NEARBY with distance, exclusion radius, closest-approach ETA), `weather_exposure`, `primary_risk_driver` (+ `risk_driver_shares`), `explanation` (strings built from the route's own metrics), `search_weights`, `generation`, `candidates_evaluated`, `provenance`.
-- **Errors**: `422` invalid mission/horizon/weights/thresholds or no route; `404` unknown `vessel_id`.
+  `route_id`, `label`, `coordinates` (`[lon, lat]`, exact origin → exact destination), `distance_km`, `eta_hours`, `estimated_fuel` (`tonnes`, `label: "PROTOTYPE ESTIMATE"`, `consumption_t_per_km`, `environmental_multiplier`), `risk_score` (0–1) + `risk_level`, `confidence`, `sea_ice_exposure` (mean/max SIC, passable/caution/restricted/impassable %, `ice_exposure_km`, `assessment`), `iceberg_exposure` (counts + `relevant_icebergs` classified INTERSECTING/POTENTIAL/NEARBY with distance, exclusion radius, closest-approach ETA, plus `horizon_hours` on the exposure object itself), `weather_exposure`, `primary_risk_driver` (+ `risk_driver_shares`), `explanation` (strings built from the route's own metrics), `search_weights`, `generation`, `candidates_evaluated`, `provenance`.
+- **Errors**: `422` invalid mission/horizon/weights/thresholds/start position or no route; `404` unknown `vessel_id`.
 - **Implementation Files**: `boreas_core/mission/` (`planner.py`, `fields.py`, `config.py`, `models.py`), route handler in `api/server.py`.
+
+---
+
+## Level 04: Shore ↔ Ship Coordination API
+
+Shared, prototype-simple REST state so the Shore application (`frontend/`) and the Ship/Captain application (`ship-app/`) agree on a vessel's active route and current position, and so a Shore-proposed route change goes through a Captain-in-the-loop accept/decline step. Polling only — no websockets, no message broker. Every route payload here is real `/mission/plan` output; this layer adds coordination state around it, never a second routing engine.
+
+**Status**: `PROTOTYPE`. `VesselState` position is `SIMULATED` — advanced from the active route's own real distance/ETA (`boreas_core/coordination/geo.py`, a function-for-function port of `frontend/src/lib/geo.ts`'s great-circle geometry), not live AIS telemetry. The *decision to check for a change* (`/coordination/simulate-environment-change`) is also simulated — boreas-core has no live hazard feed — but the resulting route comparison is two real, independently-planned `/mission/plan` outputs.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/coordination/active-route` | Shore's "Start monitoring": hands over a RoutePlan as the vessel's active route; starts its simulated voyage clock. |
+| `GET` | `/coordination/active-route/{vessel_id}` | Current `ActiveRoute` for a vessel. `404` if never activated. |
+| `GET` | `/coordination/vessel-state/{vessel_id}` | The one canonical current position (`VesselState`), advanced from the active route. `404` if no active route. |
+| `GET` | `/coordination/mission/{mission_id}` | Static `MissionInfo` (origin/destination naming), reused from `mission.config.MISSIONS`. |
+| `POST` | `/coordination/simulate-environment-change` | Replans from the vessel's current position at an advanced forecast horizon (same `plan_mission` engine); returns a `RouteUpdateCreate` preview (not yet persisted). |
+| `POST` | `/coordination/route-updates` | Persists a preview as a `PENDING` `RouteUpdate` — Shore's "Send route update"; now visible to Ship. |
+| `GET` | `/coordination/route-updates` | Lists updates, optionally filtered by `vessel_id` and/or `status`. Ship polls this for `PENDING`. |
+| `GET` | `/coordination/route-updates/{update_id}` | Single `RouteUpdate`. |
+| `POST` | `/coordination/route-updates/{update_id}/respond` | The Captain's decision (`{"status": "ACCEPTED" \| "DECLINED"}`). Accepting immediately activates `new_route` — since that route's own `coordinates[0]` is the vessel's actual position at proposal time, the ship continues seamlessly rather than restarting at the mission's origin. `409` if already resolved. |
+
+**Key models** (`boreas_core/coordination/models.py`):
+- `ActiveRoute`: `mission_id`, `vessel_id`, `route` (a full `RoutePlan`), `horizon_hours`, `activated_at`, `supersedes_update_id`.
+- `VesselState`: `vessel_id`, `mission_id`, `route_id`, `longitude`, `latitude`, `heading_deg` (null on arrival), `speed_kt`, `distance_travelled_km`, `distance_remaining_km`, `distance_to_next_waypoint_km`, `next_waypoint_index`, `progress_fraction`, `is_complete`, `activated_at`, `updated_at`, `provenance`.
+- `RouteUpdate` (extends `RouteUpdateCreate`): `update_id`, `mission_id`, `vessel_id`, `old_route_id`, `new_route_id`, `reason` (honest, numbers-derived — see `describe_route_change`), `created_at`, `current_position`, `old_route`, `new_route`, `distance_delta`/`eta_delta`/`fuel_delta`/`risk_delta` (all `new − old`), `status` (`PENDING`/`ACCEPTED`/`DECLINED`), `responded_at`.
+
+**Implementation Files**: `boreas_core/coordination/` (`geo.py`, `models.py`, `service.py`), route handlers in `api/server.py` (Level 04 section). Frontend clients: `frontend/src/services/coordinationApi.ts` (Shore), `ship-app/src/services/api.ts` (Ship — duplicated types, no shared workspace package exists between the two Vite apps).

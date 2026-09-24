@@ -35,6 +35,7 @@ interface VesselNavLayerProps {
   /** Route vertices already passed, for the covered-track trail. */
   coveredPath: LonLat[];
   nextWaypoint: LonLat | null;
+  dataSourceName?: string;
 }
 
 /** A hull-and-bow triangle, drawn pointing north so an aligned axis can swing
@@ -93,12 +94,16 @@ export const VesselNavLayer = ({
   vesselName,
   coveredPath,
   nextWaypoint,
+  // Distinct name lets a second, independent vessel marker (e.g. the fleet-
+  // monitoring workflow's backend-simulated position) coexist with this
+  // layer's usual client-simulated one, rather than sharing one data source.
+  dataSourceName = 'vessel-navigation',
 }: VesselNavLayerProps) => {
   const sourceRef = useRef<CustomDataSource | null>(null);
   const icon = useMemo(() => makeVesselIcon(), []);
 
   // The source is created once; entities are refreshed each tick below.
-  useCesiumDataSource(viewer, 'vessel-navigation', () => {}, [viewer], sourceRef);
+  useCesiumDataSource(viewer, dataSourceName, () => {}, [viewer, dataSourceName], sourceRef);
 
   // Rebuilt per position tick. The entity count is tiny (3-4), so clearing and
   // re-adding is cheaper and simpler than diffing callback properties.

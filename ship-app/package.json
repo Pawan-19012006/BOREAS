@@ -1,0 +1,28 @@
+{
+  "name": "ship-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "BOREAS SHIP -- the Captain's bridge terminal. Reads the same boreas-core backend as the Shore frontend.",
+  "scripts": {
+    "dev": "vite --port 5176",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cesium": "^1.145.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "oxlint": "^1.79.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-cesium": "^1.2.23"
+  }
+}

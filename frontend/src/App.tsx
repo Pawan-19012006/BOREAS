@@ -15,6 +15,7 @@ import NavigationPanel from './components/mission/NavigationPanel';
 import MapLegend from './components/mission/MapLegend';
 import MapLayerControls from './components/mission/MapLayerControls';
 import IcebergInspector from './components/mission/IcebergInspector';
+import FleetMonitoringPanel from './components/mission/FleetMonitoringPanel';
 import { ForecastTimeline } from './components/ForecastTimeline';
 
 import MissionRouteLayer from './layers/MissionRouteLayer';
@@ -31,6 +32,7 @@ import { useObserveIntelligence } from './hooks/useObserveIntelligence';
 import { useForecastState } from './hooks/useForecastState';
 import { useSelectedEntity } from './hooks/useSelectedEntity';
 import { useSatelliteStatus } from './hooks/useSatelliteStatus';
+import { useFleetMonitoring } from './hooks/useFleetMonitoring';
 import { useBackendStatus } from './services/backendStatus';
 import { useVoyageSimulation } from './simulation/voyageSimulation';
 import { getMission } from './services/missionApi';
@@ -85,6 +87,11 @@ function App() {
   const { icebergForecasts } = useForecastState();
   const { isConnected: isSatelliteConnected } = useSatelliteStatus();
   const [selection, setSelection] = useSelectedEntity(viewer);
+  // Shore's half of the shore<->ship coordination workflow -- additive to the
+  // phase machine above, not part of it: available once a plan exists,
+  // independent of whether the operator also enters the existing client-
+  // simulated 'navigating' phase.
+  const monitoring = useFleetMonitoring();
 
   const {
     phase,
@@ -143,6 +150,15 @@ function App() {
     const passed = routeCoordinates.slice(0, voyage.legIndex + 1) as LonLat[];
     return [...passed, voyage.position];
   }, [voyage, routeCoordinates]);
+
+  // Same idea for the fleet-monitoring vessel, whose position is the
+  // backend's own VesselState rather than the client-side voyage simulation.
+  const monitoringCoveredPath = useMemo<LonLat[]>(() => {
+    const { activeRoute, vesselState } = monitoring;
+    if (!activeRoute || !vesselState) return [];
+    const passed = activeRoute.route.coordinates.slice(0, vesselState.next_waypoint_index) as LonLat[];
+    return [...passed, [vesselState.longitude, vesselState.latitude] as LonLat];
+  }, [monitoring]);
 
   const handleEndNavigation = useCallback(() => {
     voyageControls.reset();
@@ -228,6 +244,22 @@ function App() {
                 }
               />
             )}
+
+            {monitoring.vesselState && monitoring.activeRoute && (
+              <VesselNavLayer
+                viewer={v}
+                dataSourceName="fleet-monitoring-vessel"
+                position={[monitoring.vesselState.longitude, monitoring.vesselState.latitude]}
+                headingDeg={monitoring.vesselState.heading_deg}
+                vesselName={`${plan?.vessel.name ?? 'Vessel'} · monitored`}
+                coveredPath={monitoringCoveredPath}
+                nextWaypoint={
+                  (monitoring.activeRoute.route.coordinates[
+                    monitoring.vesselState.next_waypoint_index
+                  ] as LonLat) ?? null
+                }
+              />
+            )}
           </>
         )}
       </MissionGlobe>
@@ -261,6 +293,10 @@ function App() {
           route={selectedRoute}
           onClose={() => setSelection(null)}
         />
+      )}
+
+      {phase !== 'setup' && (
+        <FleetMonitoringPanel plan={plan} selectedRoute={selectedRoute} monitoring={monitoring} />
       )}
 
       <div className="mission-shell">

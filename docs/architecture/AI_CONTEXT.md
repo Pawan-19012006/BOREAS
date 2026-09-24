@@ -16,7 +16,7 @@ It fuses:
 - **Calibrated Uncertainty Quantification**: Deep-ensemble multi-model epistemic spread and Mahalanobis distance out-of-distribution (OOD) detection with chi-square $p$-values and deterministic fallback exclusion zones.
 - **Dual-Engine Routing**: Admissible risk-weighted A* search, Stable-Baselines3 PPO reinforcement learning for local detours, and integration with the published British Antarctic Survey `polar-route` (MeshiPhi) environmental mesh engine.
 - **Satellite Earth Observation**: Real-time SAR and optical imagery via the Copernicus Data Space Ecosystem (CDSE) Sentinel Hub Process API, and daily OSI-SAF AMSR2 sea-ice concentration grids via Copernicus Marine.
-- **3D Geospatial Operations Picture**: A React 19 + TypeScript + CesiumJS 3D virtual globe tailored for polar operations.
+- **3D Geospatial Operations Picture**: A React 19 + TypeScript + CesiumJS 3D virtual globe tailored for polar operations, in two applications sharing one backend: **Shore** (`frontend/`, the full mission-planning/monitoring console) and **Ship** (`ship-app/`, the Captain's bridge terminal) — coordinated via `boreas_core/coordination/` (active route, simulated vessel position, Captain-in-the-loop route updates).
 
 ---
 
@@ -34,6 +34,8 @@ BOREAS/
 │   │   ├── fusion/          # Bayesian inverse-variance data fusion
 │   │   ├── physics/         # Hydrodynamic drag, Coriolis, RK4 drift, XGBoost residual
 │   │   ├── mission/         # Cape Town → Bharati/Maitri mission planner (POST /mission/plan)
+│   │   ├── coordination/    # Shore↔Ship shared state: active route, simulated vessel
+│   │   │                    #   position, Captain-in-the-loop route updates (POST /coordination/*)
 │   │   ├── routing/         # A*, PPO RL policy, PolarRoute adapter, scoring, directions
 │   │   ├── satellite/       # CDSE OAuth2, Sentinel Hub, Copernicus Marine, quicklooks
 │   │   ├── uncertainty/     # Mahalanobis OOD, deep ensemble, fallback buffers
@@ -52,6 +54,18 @@ BOREAS/
 │   │   ├── App.tsx          # Main layout & component coordinator
 │   │   └── index.css        # Glassmorphic dark polar styling design system
 │   └── vite.config.ts       # Vite configuration with Cesium plugin & /boreas-api proxy
+├── ship-app/                # BOREAS SHIP — Captain's bridge terminal (separate Vite app,
+│   │                        # same backend, dev port :5176). One vessel, one active route,
+│   │                        # one accept/decline decision. No shared package with frontend/ --
+│   │                        # small display-formatting utilities are deliberately duplicated
+│   │                        # (see ship-app/src/lib/format.ts).
+│   ├── src/
+│   │   ├── components/      # ShipGlobe, MissionHud, RouteUpdateAlert, VesselSelector
+│   │   ├── hooks/           # useShipSession.ts (polls active-route/vessel-state/route-updates)
+│   │   ├── services/        # api.ts — typed client for boreas-core (coordination + roster)
+│   │   └── lib/format.ts    # Maritime display formatting (no route-geometry maths needed:
+│   │                        #   position/bearing/ETA all come pre-computed from the backend)
+│   └── vite.config.ts       # Same /boreas-api proxy as frontend/, different dev port
 ├── docs/
 │   ├── architecture/        # Permanent architectural knowledge base
 │   └── design-document.md   # Original SIH proposal and feasibility justification
@@ -64,10 +78,11 @@ BOREAS/
 
 ## 3. Major Architectural Boundaries
 
-1. **Proxy Boundary**: The browser communicates only with Vite (`:5174`). Calls to `/boreas-api/*` are reverse-proxied to `boreas-core` (`http://localhost:8000`). Upstream satellite credentials never touch the browser.
-2. **Core Process Lifetime Singleton (`boreas_core/api/state.py`)**: `boreas-core` keeps its residual model, SHAP explainer, OOD detector, and router in an in-memory `AppState` initialized once on first call to `get_state()`. There is no SQL database.
+1. **Proxy Boundary**: The browser communicates only with Vite (`:5174` for Shore, `:5176` for Ship). Calls to `/boreas-api/*` are reverse-proxied to `boreas-core` (`http://localhost:8000`) from **both** applications. Upstream satellite credentials never touch the browser.
+2. **Core Process Lifetime Singleton (`boreas_core/api/state.py`)**: `boreas-core` keeps its residual model, SHAP explainer, OOD detector, and router in an in-memory `AppState` initialized once on first call to `get_state()`. There is no SQL database. `boreas_core/coordination/service.py` follows the same in-memory-singleton pattern for the active-route/vessel-state/route-update stores — one shared backend process is the only thing making Shore and Ship agree on vessel state; restarting `boreas-core` clears it.
 3. **Fail-Closed Satellite Architecture**: If satellite credentials are not configured in `.env`, the backend reports `connected: false` and returns HTTP 503 on imagery requests. It **never** serves a fake or mislabeled image as live data.
 4. **Decoupled Upstream Training**: `boreas-core` consumes exported artifacts (`.npz`, `.zip`) from `icenet-mp` but does not import `icenet-mp` directly.
+5. **Shore↔Ship Communication**: Deliberately simple REST + polling (`GET` every ~2s from both apps) — no websockets, no message broker. `boreas_core/coordination/geo.py` is a function-for-function port of `frontend/src/lib/geo.ts`'s great-circle geometry, so the backend's canonical `VesselState` position agrees with how Shore's own client-simulated navigation HUD computes the same kind of value elsewhere.
 
 ---
 
@@ -87,7 +102,8 @@ All backend endpoints are in `boreas_core/api/server.py` and validated by Pydant
 | `/forecast/ensemble-grid` | `GET` | Query params | `EnsembleGridResponse` | 32x32 mean & spread grid |
 | `/edge/report` | `GET` | None | `EdgeReportResponse` | Distillation & quantization metrics |
 | `/fusion/demo` | `POST` | `FusionRequest` | `FusionResponse` | Bayesian conjugate-Gaussian update |
-| `/mission/plan` | `POST` | `MissionPlanRequest` | `MissionPlanResponse` | Cape Town → Bharati/Maitri: 3 routes (recommended / low-risk / fast-fuel) at a forecast horizon |
+| `/mission/plan` | `POST` | `MissionPlanRequest` | `MissionPlanResponse` | Cape Town → Bharati/Maitri: 3 routes (recommended / low-risk / fast-fuel) at a forecast horizon; optional `start_lon`/`start_lat` override for an underway replan |
+| `/coordination/*` | `GET`/`POST` | see below | see below | Shore↔Ship shared state: active route, simulated vessel position, Captain-in-the-loop route updates. Full list in `API_REFERENCE.md` §Level 04. |
 
 ---
 
@@ -123,10 +139,28 @@ npm run build
 npm run dev -- --port 5174
 ```
 
+### Ship (`ship-app`)
+```bash
+# Install dependencies
+npm install
+
+# Lint source code
+npm run lint
+
+# Typecheck and build production bundle
+npm run build
+
+# Start ship development server (proxies /boreas-api to the same :8000 backend)
+npm run dev -- --port 5176
+```
+
 ### Full System
 ```bash
-# Start backend and frontend simultaneously
+# Start backend and Shore frontend simultaneously
 ./start.sh
+
+# Ship is a separate process, started manually (not yet wired into start.sh):
+cd ship-app && npm run dev -- --port 5176
 ```
 
 ---
@@ -153,6 +187,9 @@ npm run dev -- --port 5174
 | **A* Graph Search & Cost** | `boreas_core/routing/astar.py`, `grid.py` |
 | **RL Re-planning Policy** | `boreas_core/routing/policy.py`, `env.py`, `train_ppo.py` |
 | **Mission Route Planning** | `boreas_core/mission/planner.py`, `fields.py`, `config.py` |
+| **Shore↔Ship Coordination** | `boreas_core/coordination/service.py`, `models.py`, `geo.py` |
+| **Ship (Captain) Application** | `ship-app/src/App.tsx`, `hooks/useShipSession.ts`, `services/api.ts`, `components/` |
+| **Shore Fleet-Monitoring UI** | `frontend/src/hooks/useFleetMonitoring.ts`, `components/mission/FleetMonitoringPanel.tsx`, `services/coordinationApi.ts` |
 | **PolarRoute Baseline** | `boreas_core/routing/polarroute_adapter.py`, `scoring.py` |
 | **Out-of-Distribution & Fallbacks** | `boreas_core/uncertainty/ood.py`, `fallback.py` |
 | **Satellite Fetching & Auth** | `boreas_core/satellite/cdse_auth.py`, `sentinel_hub.py`, `copernicus_marine_fetch.py` |
@@ -174,6 +211,7 @@ npm run dev -- --port 5174
 3. **Admissible A* Baseline**: The system must never rely solely on reinforcement learning (PPO) for global route planning. A* is the primary fallback that guarantees path solvability.
 4. **SingleTileImageryProvider Bounds & Dimensions**: When altering satellite or heatmap imagery providers, ensure `Rectangle.fromDegrees()` bounds match backend bounding boxes exactly, and pass explicit numeric `tileWidth` and `tileHeight` to avoid Cesium rendering crashes.
 5. **Latitude Row Inversion**: Notice that image formats and HTML5 Canvas have $(0, 0)$ at the top-left (North), whereas NetCDF4 and NumPy grids may index row 0 at South ($-90^\circ$). Always verify latitude ordering before modifying canvas or rasterization routines.
+6. **Two Vessel Rosters, One `id` Space**: `boreas_core/vessels/roster.py` (`GET /vessels/roster`, used by Ship's vessel picker) and `boreas_core/observe/service.py` (`GET /observe/vessels`, used for `ice_class`/profile lookup and validated by `mission.planner.resolve_vessel`) are two independent datasets, but every currently-`active` id in the former is also present in the latter. `coordination.activate_route` calls `resolve_vessel` and will 404 for any id that isn't in `observe`'s roster — if a vessel is ever added to one roster without the other, keep them in that same-`id`-space relationship or the Ship app's picker will offer vessels that fail to activate.
 
 ---
 

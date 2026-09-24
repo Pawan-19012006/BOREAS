@@ -36,10 +36,17 @@ boreas-core/     FastAPI backend — drift forecasting, ensemble uncertainty,
                  PolarRoute (second routing engine), vessel roster + AIS,
                  satellite fetch (CDSE / Sentinel Hub / Copernicus Marine),
                  SHAP explainability, edge-distilled model + ONNX export.
-frontend/        React + Vite + CesiumJS 3D globe. Google Earth Pro-style
-                 UI: voyage planner, live satellite tile panels, forecast /
-                 fusion / edge-AI inspector panels, real vessel tracking.
-start.sh         Single command to run the whole system locally.
+frontend/        BOREAS SHORE — React + Vite + CesiumJS 3D globe. Mission
+                 planning/monitoring console: voyage planner, route
+                 comparison, satellite/sea-ice/iceberg layers, and a
+                 fleet-monitoring workflow that proposes route updates to
+                 the Ship application for the Captain's approval.
+ship-app/        BOREAS SHIP — a separate, smaller React + Vite + CesiumJS
+                 app: the Captain's bridge terminal. One vessel, one active
+                 route, and an accept/decline decision when Shore proposes
+                 a change. Same backend as frontend/, different dev port.
+start.sh         Single command to run the backend + Shore locally
+                 (ship-app is started separately; see docs/architecture).
 ```
 
 **Not included in this repository** (see "External dependencies" below):

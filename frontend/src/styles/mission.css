@@ -1203,6 +1203,59 @@ input[type='range']::-moz-range-thumb {
   }
 }
 
+/* ============================ Fleet monitoring ============================ */
+
+/* Docked along the left edge, below the layer-control pills -- the left
+   column is otherwise deliberately empty (see App.tsx), so this is additive
+   real estate, not a rework of the existing panel stack. */
+.fleet-monitoring-panel {
+  position: absolute;
+  left: var(--space-4);
+  top: 132px;
+  z-index: 25;
+  width: 320px;
+  max-width: calc(100vw - var(--space-4) * 2);
+  max-height: min(62vh, 520px);
+}
+
+.delta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.delta-tag {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.delta-tag[data-sense='better'] {
+  color: var(--go);
+}
+
+.delta-tag[data-sense='worse'] {
+  color: var(--restricted);
+}
+
+.delta-tag[data-sense='flat'] {
+  color: var(--ink-dim);
+}
+
+@media (max-width: 900px) {
+  .fleet-monitoring-panel {
+    top: auto;
+    bottom: 96px;
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto;
+    max-height: 40vh;
+  }
+}
+
 /* ============================ Map legend ============================ */
 
 .map-legend {

@@ -152,7 +152,65 @@ that promise settles is a no-op, and the pending add then completes — orphanin
 globe. React StrictMode double-invokes effects, so this duplicated every mission layer and left
 stale copies drawn with superseded props (e.g. alternate routes still visible during navigation).
 `layers/useCesiumDataSource.ts` makes teardown await the add and is the required way to attach a
-`CustomDataSource` in mission layers. The pre-existing explorer layers still use the naive pattern.
+`CustomDataSource` in mission layers. `layers/IcebergLayer.tsx` (the restored full historical-
+track/predicted-trajectory layer, toggled by the ICEBERGS map-layer pill) was migrated onto this
+same safe lifecycle when it was first mounted in the mission experience — the pre-existing
+explorer-only layers that remain unmounted still use the naive pattern.
+
+### Map layer toggles, iceberg inspector, fleet monitoring
+
+- `components/mission/MapLayerControls.tsx`: Google-Maps-style pills (Routes / Icebergs / Sea ice
+  / Satellite) directly over the globe, each toggling exactly one existing layer's `visible` prop
+  — no new rendering logic. Satellite shows a real, backend-checked `Real · CDSE` / `Not connected`
+  tag from `useSatelliteStatus`, never a hardcoded "live" label.
+- `components/mission/IcebergInspector.tsx`: floating card for a clicked iceberg (via the existing
+  `useSelectedEntity` hook), showing current position/drift, +12/24/48h forecast points, and
+  distance to the selected route (the backend's own figure when the berg is one of the route's
+  `relevant_icebergs`, otherwise a plain `haversineKm` fallback to the nearest route vertex).
+- `hooks/useFleetMonitoring.ts` + `components/mission/FleetMonitoringPanel.tsx`: Shore's half of
+  the shore↔ship coordination workflow (see below) — activate a route, poll its simulated vessel
+  position, simulate an environment change, review the real replanned route, send it, watch for
+  the Captain's decision. **Additive**: does not touch the setup/planning/navigating phase machine
+  or `simulation/voyageSimulation.ts`; it is a separate capability available once a plan exists.
+  Its own vessel marker reuses `VesselNavLayer` with a distinct `dataSourceName` prop so it never
+  shares a Cesium data source with the existing client-simulated navigating-phase vessel.
+
+### Shore↔Ship coordination (`services/coordinationApi.ts`)
+
+Typed client mirroring `boreas_core/coordination/models.py` exactly (`ActiveRoute`, `VesselState`,
+`RouteUpdate`, `RouteUpdateCreate`). `POST /coordination/simulate-environment-change` returns a
+`RouteUpdateCreate` preview that Shore reviews locally before `POST /coordination/route-updates`
+persists it as `PENDING` and makes it visible to the Ship application. See `ship-app/` (a separate
+Vite application, same backend) and `docs/architecture/API_REFERENCE.md` §Level 04 for the full
+contract and the "no jump back to the mission origin" continuity guarantee on acceptance.
+
+---
+
+## 1b. Ship Application (`ship-app/`)
+
+A separate, much smaller Vite + React + CesiumJS application — the Captain's bridge terminal, not
+a second Shore. One vessel, one active route, one decision to make. No shared workspace package
+exists between `frontend/` and `ship-app/` in this repo, so a handful of small, pure display-
+formatting functions (`ship-app/src/lib/format.ts`) are deliberately duplicated from
+`frontend/src/lib/geo.ts` — never the route-geometry maths itself, since Ship never walks route
+coordinates client-side: position, bearing, distance-to-waypoint and ETA all come pre-computed
+from `GET /coordination/vessel-state`.
+
+```
+ship-app/src/
+├── services/api.ts        # Typed client: /coordination/*, GET /vessels/roster
+├── hooks/useShipSession.ts # Polls active-route + vessel-state + pending route-updates (2s)
+├── components/
+│   ├── ShipGlobe.tsx       # One route (signal amber) + one vessel marker; no layer toggles
+│   ├── MissionHud.tsx      # Bottom bar: position, course/speed, next waypoint, ETA, hazards
+│   ├── RouteUpdateAlert.tsx # Modal: reason, current vs proposed route, trade-offs, accept/decline
+│   └── VesselSelector.tsx  # Initial screen: which roster vessel this terminal represents
+└── styles.css              # Same design tokens as Shore's mission.css, far fewer components
+```
+
+Dev server on port `5176`, proxying `/boreas-api` to the same `:8000` backend as Shore — the two
+applications are independent processes reading and writing the same `boreas_core.coordination`
+state, which is how they end up showing the same vessel position without a message broker.
 
 ---
 
