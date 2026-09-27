@@ -79,6 +79,32 @@ export interface FuelEstimate {
 
 export type PassabilityLevel = 'PASSABLE' | 'CAUTION' | 'RESTRICTED' | 'IMPASSABLE';
 
+/** Re-check of the finished route against the environment, sampled ALONG each
+ *  segment rather than only at its vertices. */
+export interface RouteValidation {
+  valid: boolean;
+  max_sic_pct: number;
+  navigable_limit_pct: number;
+  impassable_intersections: number;
+  restricted_segments: number;
+  land_intersections: number;
+  first_violation: [number, number] | null;
+  notes: string[];
+}
+
+/** Re-check of the finished route against the environment, sampled ALONG each
+ *  segment rather than only at its vertices. */
+export interface RouteValidation {
+  valid: boolean;
+  max_sic_pct: number;
+  navigable_limit_pct: number;
+  impassable_intersections: number;
+  restricted_segments: number;
+  land_intersections: number;
+  first_violation: [number, number] | null;
+  notes: string[];
+}
+
 export interface SeaIceExposure {
   model: string;
   vessel_ice_class: string;
@@ -91,6 +117,11 @@ export interface SeaIceExposure {
   ice_exposure_km: number;
   assessment: PassabilityLevel;
   max_level_encountered: PassabilityLevel;
+  /** Highest SIC this hull may enter, as a percentage. Cells above it are
+   *  hard-blocked for the router, and the map shades them as blocked -- one
+   *  number drives both, which is what keeps them consistent. */
+  navigable_limit_pct: number;
+  validation: RouteValidation | null;
 }
 
 export type IcebergClassification = 'INTERSECTING' | 'POTENTIAL' | 'NEARBY';

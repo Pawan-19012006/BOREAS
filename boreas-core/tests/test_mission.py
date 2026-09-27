@@ -325,10 +325,16 @@ def test_vessel_ice_class_maps_to_constraint_profile():
     assert profile_for_ice_class("Arc5 / UL").tier == "ICE_STRENGTHENED"
     assert profile_for_ice_class("no ice class").tier == "LIMITED_ICE_CAPABILITY"
     heavy = _routes(_plan("CAPE_TOWN_TO_BHARATI"))["recommended"]  # Golovnin, Arc7
-    resp = _post(mission_id="CAPE_TOWN_TO_BHARATI", vessel_id="agulhas_ii").json()
-    assert resp["vessel"]["profile_tier"] == "ICE_STRENGTHENED"
-    assert resp["routes"][0]["estimated_fuel"]["consumption_t_per_km"] < 0.078
     assert heavy.sea_ice_exposure.vessel_ice_class == "Arc7 / ULA"
+    assert heavy.estimated_fuel.consumption_t_per_km == 0.078
+
+    # An ice-strengthened hull is REFUSED this passage rather than given a
+    # cheaper route: both stations sit in ~100% fast ice, above its working
+    # limit. The refusal names the limit, so the ice class is still visible in
+    # the outcome -- it decides feasibility here, not just fuel burn.
+    refused = _post(mission_id="CAPE_TOWN_TO_BHARATI", vessel_id="agulhas_ii")
+    assert refused.status_code == 422
+    assert "90%" in refused.json()["detail"]
 
 
 # --------------------------------------------------------------------- API ---

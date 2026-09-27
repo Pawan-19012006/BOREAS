@@ -166,11 +166,32 @@ def in_domain(lon: float, lat: float) -> bool:
     )
 
 
+# Southern-Africa coast block, as an analytic box. Very coarse -- not a
+# navigational coastline. Antarctica itself is the domain's southern edge, so
+# it needs no mask of its own.
+_LAND_LON_RANGE = (19.0, 35.0)
+_LAND_LAT_MIN = -34.5
+
+
+def land_at(lon, lat):
+    """Whether a POINT is on land, evaluated analytically.
+
+    Deliberately not "snap to the nearest grid cell and read the mask": the grid
+    is 1 degree, so a point 0.25 degrees clear of the coast box snaps into a
+    land cell and is wrongly rejected. Route validation samples continuous
+    positions along a segment, so it needs the predicate at the point, not at
+    the cell the point rounds to. `land_mask` below is this same box sampled on
+    the grid, so the two cannot drift apart.
+    """
+    lon = np.asarray(lon, dtype=float)
+    lat = np.asarray(lat, dtype=float)
+    return (lon >= _LAND_LON_RANGE[0]) & (lon <= _LAND_LON_RANGE[1]) & (lat > _LAND_LAT_MIN)
+
+
 def land_mask(lons: np.ndarray, lats: np.ndarray) -> np.ndarray:
-    """Very coarse southern-Africa coast block (not a navigational coastline).
-    Antarctica itself is the domain's southern edge, so it needs no mask."""
+    """`land_at` evaluated on the navigation grid, for the router's cell mask."""
     lon_grid, lat_grid = np.meshgrid(lons, lats)
-    return (lon_grid >= 19.0) & (lon_grid <= 35.0) & (lat_grid > -34.5)
+    return land_at(lon_grid, lat_grid)
 
 
 # ------------------------------------------------------------------- fields ---

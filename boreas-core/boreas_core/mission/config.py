@@ -43,7 +43,13 @@ MISSIONS: dict[str, MissionDef] = {
         origin=CAPE_TOWN_PORT,
         destination_name="Maitri Station",
         destination=(11.731944, -70.766667),
-        default_vessel_id="ivan_papanin",
+        # Golovnin, not Papanin. The roster assigns Golovnin to both stations
+        # and Papanin only to Bharati, so this default contradicted the roster.
+        # It also could not work: Papanin is a 1990 ice-strengthened cargo ship
+        # (Arc5), and Maitri sits in ~100% fast ice, which needs an icebreaker.
+        # Selecting Papanin for this leg is still allowed -- the planner then
+        # explains exactly why it cannot make the passage.
+        default_vessel_id="vasiliy_golovnin",
     ),
 }
 

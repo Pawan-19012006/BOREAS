@@ -80,6 +80,31 @@ class FuelEstimate(BaseModel):
     formula: str = "distance x vessel consumption x environmental multiplier"
 
 
+class RouteValidation(BaseModel):
+    """The result of re-checking a finished route against the environment it was
+    planned in, sampled ALONG each segment rather than only at its vertices.
+
+    A* works cell to cell, but the polyline it produces (and the string-pulling
+    that simplifies it) can span several cells per segment. Checking only the
+    vertices would let a leg cut the corner of a blocked cell and still be
+    reported as valid -- which is exactly the map/route contradiction this
+    exists to prevent.
+    """
+
+    valid: bool
+    max_sic_pct: float = Field(..., description="Highest concentration anywhere on the track")
+    navigable_limit_pct: float = Field(..., description="This hull's limit, for comparison")
+    impassable_intersections: int = Field(
+        ..., description="Samples over this hull's navigable limit (excluding the berth itself)"
+    )
+    restricted_segments: int = Field(..., description="Samples in RESTRICTED ice")
+    land_intersections: int
+    first_violation: list[float] | None = Field(
+        None, description="[lon, lat] of the first blocking sample, for diagnosis"
+    )
+    notes: list[str] = Field(default_factory=list)
+
+
 class SeaIceExposure(BaseModel):
     model: str = "PROTOTYPE PASSABILITY MODEL"
     vessel_ice_class: str
@@ -92,6 +117,14 @@ class SeaIceExposure(BaseModel):
     ice_exposure_km: float = Field(..., description="Distance with SIC above the PASSABLE threshold")
     assessment: str = Field(..., description="Worst level covering >=10% of route distance")
     max_level_encountered: str
+    navigable_limit_pct: float = Field(
+        ...,
+        description=(
+            "Highest SIC this hull may enter. Cells above it are hard-blocked for the router, "
+            "and the map shades them as blocked FOR THIS VESSEL -- the same number drives both."
+        ),
+    )
+    validation: RouteValidation | None = None
 
 
 class RelevantIceberg(BaseModel):

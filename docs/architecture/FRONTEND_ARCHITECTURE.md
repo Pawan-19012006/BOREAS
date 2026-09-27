@@ -175,6 +175,14 @@ explorer-only layers that remain unmounted still use the naive pattern.
   applies, not an operator preference — and every displayed value comes from the `/mission/plan`
   response. "Why the track bends" lists the route's `deviations`, filtering out `NAVIGATION_COST`
   so no bend is given a hazard explanation it does not have.
+- `layers/SeaIceLayer.tsx` + `components/mission/MapLegend.tsx`: the raster's four bands describe ICE
+  CONDITIONS by concentration (`Open water <30%`, `Caution 30-60%`, `Restricted 60-80%`,
+  `Very close pack >80%`) — deliberately NOT labelled "impassable", which is a navigability claim
+  the band does not make and which an icebreaker routinely contradicts. Whether water can be
+  entered is the separate `Beyond hull limit (N%)` band, drawn from the `navigable_limit_pct` the
+  backend used to block the router, so a cell the map shades as blocked is a cell no route enters.
+  `isBlockedForVessel` mirrors `boreas_core.mission.passability.is_navigable`; the limit itself is
+  never re-derived client-side, it arrives on the plan response.
 - `hooks/useMapRouteState.ts`: what the globe draws, as one explicit state
   (`PLANNING` / `NAVIGATING` / `REROUTING` / `PROPOSAL_SELECTED`) derived from the coordination
   backend's `ActiveRoute` and `RouteUpdate` rather than render-site booleans. It emits a list of
@@ -223,6 +231,14 @@ explorer-only layers that remain unmounted still use the naive pattern.
   to poll in one action, so there is no "Start monitoring" button. The panel is an informational
   state — `Navigation active` with `Monitoring live`, or `Telemetry paused for replanning` while a
   route decision is outstanding and the vessel is frozen.
+- `layers/SeaIceLayer.tsx` + `components/mission/MapLegend.tsx`: the raster's four bands describe ICE
+  CONDITIONS by concentration (`Open water <30%`, `Caution 30-60%`, `Restricted 60-80%`,
+  `Very close pack >80%`) — deliberately NOT labelled "impassable", which is a navigability claim
+  the band does not make and which an icebreaker routinely contradicts. Whether water can be
+  entered is the separate `Beyond hull limit (N%)` band, drawn from the `navigable_limit_pct` the
+  backend used to block the router, so a cell the map shades as blocked is a cell no route enters.
+  `isBlockedForVessel` mirrors `boreas_core.mission.passability.is_navigable`; the limit itself is
+  never re-derived client-side, it arrives on the plan response.
 - `hooks/useMapRouteState.ts`: what the globe draws, as one explicit state
   (`PLANNING` / `NAVIGATING` / `REROUTING` / `PROPOSAL_SELECTED`) derived from the coordination
   backend's `ActiveRoute` and `RouteUpdate` rather than render-site booleans. It emits a list of

@@ -28,6 +28,7 @@ from boreas_core.forecast.weather_severity import (
 from boreas_core.observe.service import get_observed_vessels
 from boreas_core.routing.astar import astar_route
 
+from .passability import classify_sic, navigable_limit_sic
 from .config import (
     DEFAULT_ICE_THRESHOLDS,
     DEVIATION_MAX_CAUSE_DISTANCE_KM,
@@ -55,6 +56,7 @@ from .fields import (
     domain_axes,
     haversine_km_array,
     in_domain,
+    land_at,
     land_mask,
 )
 from .models import (
@@ -69,6 +71,7 @@ from .models import (
     RouteDeviation,
     RoutePlan,
     RouteTradeoff,
+    RouteValidation,
     RouteWeights,
     SeaIceExposure,
     VesselSummary,
@@ -145,16 +148,70 @@ def _separation_km(a: list, b: list) -> float:
     return 0.5 * (one_way(pa, pb) + one_way(pb, pa))
 
 
-def _search(lons, lats, penalty: np.ndarray, land: np.ndarray, start, goal):
+BLOCKED_THRESHOLD = 0.95  # astar treats a cell at or above this as unavailable
+
+
+def _search(lons, lats, penalty: np.ndarray, blocked: np.ndarray, start, goal):
+    """A* over the navigation grid, with `blocked` cells genuinely unavailable.
+
+    `blocked` is land plus every cell whose ice concentration exceeds this
+    hull's navigable limit. Those are pinned at 1.0, above A*'s block threshold,
+    so the search cannot route through them at any price -- which is what makes
+    the map's classification and the route agree. Everything else is clipped
+    below the threshold: expensive water stays traversable.
+
+    The start and goal cells are the one exception. An Antarctic station sits in
+    fast ice, so the destination cell is frequently over the limit; refusing to
+    let the search terminate there would make every mission infeasible while
+    saying nothing useful about the corridor. The APPROACH still has to be
+    navigable cell by cell, and `validate_route` reports the concentration at
+    the berth, so the cost is disclosed rather than hidden.
+    """
     risk = np.clip(penalty, 0.0, MAX_PENALTY)
-    risk[land] = 1.0
-    risk[start] = min(risk[start], MAX_PENALTY)
-    risk[goal] = min(risk[goal], MAX_PENALTY)
+    risk[blocked] = 1.0
+    risk[start] = min(float(risk[start]), MAX_PENALTY)
+    risk[goal] = min(float(risk[goal]), MAX_PENALTY)
     grid = NavGrid(lons=lons, lats=lats, risk=risk)
-    result = astar_route(grid, start, goal, risk_weight=RISK_WEIGHT_SCALE, blocked_threshold=0.95)
+    result = astar_route(
+        grid, start, goal, risk_weight=RISK_WEIGHT_SCALE, blocked_threshold=BLOCKED_THRESHOLD
+    )
     if result is None:
-        raise NoRouteFound("No navigable route exists between origin and destination in the domain.")
+        raise NoRouteFound(
+            "No navigable corridor found under the selected sea-ice forecast and vessel "
+            "constraints."
+        )
     return result
+
+
+def _no_corridor_message(
+    *, grid_fields, blocked, land, profile, vessel_ice_class: str, lats
+) -> str:
+    """Says WHY no corridor exists, rather than just that none does.
+
+    A bare failure leaves the operator unable to tell an unsuitable hull from a
+    broken planner, so this reports the hull's limit and how much of the
+    domain it shuts out.
+    """
+    limit = navigable_limit_sic(profile)
+    ocean = ~land
+    over = blocked & ocean
+    share = float(over.sum()) / float(ocean.sum()) if ocean.any() else 0.0
+
+    # A latitude band that is blocked across every longitude is a wall: no
+    # detour can exist, which is worth stating plainly.
+    walls = [float(lats[r]) for r in range(len(lats)) if (blocked[r] | land[r]).all()]
+    detail = (
+        f" Ice exceeds that limit across every longitude between {max(walls):.0f}° and "
+        f"{min(walls):.0f}° S, so no detour around it exists."
+        if walls
+        else ""
+    )
+    return (
+        "No navigable corridor found under the selected sea-ice forecast and vessel "
+        f"constraints. A {vessel_ice_class} hull ({profile.tier.replace('_', ' ').lower()}) "
+        f"is limited to {limit:.0%} sea-ice concentration, which blocks {share:.0%} of the "
+        f"navigable domain at this horizon.{detail}"
+    )
 
 
 def _snap_km(lon, lat, lons, lats, cell) -> float:
@@ -486,7 +543,118 @@ def _hotspot_encounters(
     return out
 
 
-def _evaluate_route(coords, fm: FieldModel, ice_class: str, thresholds: IceThresholds, snapshot: HazardSnapshot):
+
+# --------------------------------------------------------- route validation ---
+
+# Samples per degree of grid resolution when walking a segment. The navigation
+# grid is 1 degree, so sampling several times per cell guarantees no cell is
+# stepped over -- a segment cannot slip between samples and cut the corner of a
+# blocked cell unnoticed.
+VALIDATION_SAMPLES_PER_CELL = 4
+
+
+def _sample_segment(a, b, resolution_deg: float):
+    """Points along a segment, spaced finely enough that consecutive samples
+    cannot land either side of a grid cell."""
+    span_deg = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+    n = max(2, int(math.ceil(span_deg / resolution_deg * VALIDATION_SAMPLES_PER_CELL)) + 1)
+    t = np.linspace(0.0, 1.0, n)
+    return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+
+
+def validate_route(
+    coords,
+    *,
+    fm: FieldModel,
+    profile,
+    thresholds: IceThresholds,
+    lons,
+    lats,
+    land,
+) -> RouteValidation:
+    """Re-checks a finished route against the environment, segment by segment.
+
+    This is the invariant the map depends on: if the map shades a cell as
+    blocked for this hull, no valid route may enter it. A* already refuses
+    those cells, but the polyline it returns -- and the string-pulling that
+    simplifies it -- can cross cells the search never stood on, so the finished
+    geometry is checked again here rather than assumed.
+
+    The destination cell is exempt, and only the destination: an Antarctic
+    station sits in fast ice by nature. The concentration there is still
+    reported, so the berth's condition is disclosed rather than quietly passed.
+    """
+    limit = navigable_limit_sic(profile)
+    resolution = float(abs(lats[1] - lats[0])) if len(lats) > 1 else 1.0
+
+    dest = coords[-1]
+    dest_cell = (
+        int(np.argmin(np.abs(lats - dest[1]))),
+        int(np.argmin(np.abs(lons - dest[0]))),
+    )
+
+    max_sic = 0.0
+    impassable = 0
+    restricted = 0
+    land_hits = 0
+    first_violation = None
+
+    for a, b in zip(coords[:-1], coords[1:]):
+        lon_s, lat_s = _sample_segment(a, b, resolution)
+        sic_s = fm.sic_at(lon_s, lat_s)
+        max_sic = max(max_sic, float(np.max(sic_s)))
+
+        for lon, lat, sic in zip(lon_s, lat_s, sic_s):
+            cell = (
+                int(np.argmin(np.abs(lats - lat))),
+                int(np.argmin(np.abs(lons - lon))),
+            )
+            # Land is evaluated AT THE POINT, not at the cell it snaps to: on a
+            # 1-degree grid a position comfortably offshore can round into a
+            # coastal land cell and be rejected for crossing a coast it never
+            # touched.
+            if bool(land_at(lon, lat)):
+                land_hits += 1
+                if first_violation is None:
+                    first_violation = [float(lon), float(lat)]
+                continue
+            if classify_sic(float(sic), thresholds) == "RESTRICTED":
+                restricted += 1
+            if float(sic) > limit and cell != dest_cell:
+                impassable += 1
+                if first_violation is None:
+                    first_violation = [float(lon), float(lat)]
+
+    notes: list[str] = []
+    berth_sic = float(fm.sic_at(np.array([dest[0]]), np.array([dest[1]]))[0])
+    if berth_sic > limit:
+        notes.append(
+            f"Station approach is in {berth_sic * 100:.0f}% concentration fast ice, above this "
+            f"hull's {limit * 100:.0f}% working limit; the berth itself is exempt from the "
+            "corridor block."
+        )
+
+    return RouteValidation(
+        valid=(impassable == 0 and land_hits == 0),
+        max_sic_pct=round(max_sic * 100, 1),
+        navigable_limit_pct=round(limit * 100, 1),
+        impassable_intersections=impassable,
+        restricted_segments=restricted,
+        land_intersections=land_hits,
+        first_violation=first_violation,
+        notes=notes,
+    )
+
+
+def _evaluate_route(
+    coords,
+    fm: FieldModel,
+    ice_class: str,
+    thresholds: IceThresholds,
+    snapshot: HazardSnapshot,
+    *,
+    validation: RouteValidation | None = None,
+):
     """Metrics from the final polyline, sampled every ~SAMPLE_SPACING_KM."""
     pts = np.asarray(coords, dtype=float)
     mid_lon, mid_lat, seg_len = [], [], []
@@ -533,6 +701,8 @@ def _evaluate_route(coords, fm: FieldModel, ice_class: str, thresholds: IceThres
         ice_exposure_km=round(float(seg_len[level >= 1].sum()), 1),
         assessment=assessment,
         max_level_encountered=PASSABILITY_LEVELS[int(level.max())],
+        navigable_limit_pct=round(navigable_limit_sic(fm.profile) * 100, 1),
+        validation=validation,
     )
 
     # -- icebergs
@@ -718,6 +888,12 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     # to the same regions.
     hotspots = detect_hotspots_cached(lons, lats, snapshot.horizon_hours)
 
+    # The one mask that makes the map and the router agree: land, plus every
+    # cell whose concentration is beyond what this hull can work. These are
+    # unavailable to the search at any price -- not merely expensive.
+    over_limit = grid_fields.sic > navigable_limit_sic(profile)
+    blocked = land | over_limit
+
     def cell_of(lon, lat):
         return int(np.argmin(np.abs(lats - lat))), int(np.argmin(np.abs(lons - lon)))
 
@@ -725,6 +901,8 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
 
     # -- candidate pool
     candidates: list[dict] = []
+    # Geometry the validator refused, kept so a total failure can say WHY.
+    rejected: list[RouteValidation] = []
 
     def add_candidate(result, w: RouteWeights, generation: str) -> bool:
         # The raw A* path is an 8-connected staircase; simplify it so the only
@@ -733,9 +911,16 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
         # below, which needs the full swept corridor to push later candidates
         # away properly.
         risk_eff = np.clip(_cell_penalty(grid_fields, w), 0.0, MAX_PENALTY)
-        risk_eff[land] = 1.0
+        # Blocked cells are pinned above the shortcut threshold so string-pulling
+        # cannot straighten a leg THROUGH ice the search itself refused.
+        risk_eff[blocked] = 1.0
         simple_cells, causes = _simplify_path(
-            result.path_cells, risk_eff, lons, lats, hazard_field=grid_fields.risk
+            result.path_cells,
+            risk_eff,
+            lons,
+            lats,
+            hazard_field=grid_fields.risk,
+            blocked_threshold=BLOCKED_THRESHOLD,
         )
         simple_lonlat = [(float(lons[c[1]]), float(lats[c[0]])) for c in simple_cells]
 
@@ -750,6 +935,24 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
         coords = (
             [list(origin)] + [[lo, la] for lo, la in simple_lonlat] + [list(mission.destination)]
         )
+
+        # Final environmental pass on the geometry that will actually be shown.
+        # A candidate that enters blocked water is discarded outright rather
+        # than surfaced with a warning: the operator must never be offered a
+        # route the map says is impossible.
+        validation = validate_route(
+            coords,
+            fm=fm,
+            profile=profile,
+            thresholds=thresholds,
+            lons=lons,
+            lats=lats,
+            land=land,
+        )
+        if not validation.valid:
+            rejected.append(validation)
+            return False
+
         candidates.append(
             {
                 "weights": w,
@@ -768,14 +971,31 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                     thresholds=thresholds,
                     hotspots=hotspots,
                 ),
-                "m": _evaluate_route(coords, fm, vessel.ice_class, thresholds, snapshot),
+                "m": _evaluate_route(
+                    coords, fm, vessel.ice_class, thresholds, snapshot, validation=validation
+                ),
             }
         )
         return True
 
+    def no_corridor() -> NoRouteFound:
+        return NoRouteFound(
+            _no_corridor_message(
+                grid_fields=grid_fields,
+                blocked=blocked,
+                land=land,
+                profile=profile,
+                vessel_ice_class=vessel.ice_class,
+                lats=lats,
+            )
+        )
+
     for wr, wf, we in [(weights.risk, weights.fuel, weights.eta)] + POOL_WEIGHTS:
         w = RouteWeights(risk=wr, fuel=wf, eta=we)
-        result = _search(lons, lats, _cell_penalty(grid_fields, w), land, start, goal)
+        try:
+            result = _search(lons, lats, _cell_penalty(grid_fields, w), blocked, start, goal)
+        except NoRouteFound:
+            raise no_corridor() from None
         add_candidate(result, w, f"A* with weights risk {wr:.2f} / fuel {wf:.2f} / ETA {we:.2f}")
 
     # k-alternatives: re-run A* with the corridors of ALL routes found so far penalised,
@@ -796,7 +1016,9 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                     mask[cell] = True
             mask = binary_dilation(mask, iterations=2)
             mask[start] = mask[goal] = False
-            result = _search(lons, lats, _cell_penalty(grid_fields, w) + extra * mask, land, start, goal)
+            result = _search(
+                lons, lats, _cell_penalty(grid_fields, w) + extra * mask, blocked, start, goal
+            )
             add_candidate(
                 result,
                 w,
@@ -815,6 +1037,19 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
         vals = [key(c["m"]) for c in candidates]
         lo, hi = min(vals), max(vals)
         return [0.0 if hi - lo < 1e-9 else (v - lo) / (hi - lo) for v in vals]
+
+    # Every candidate the search produced was refused by validation: the search
+    # found cell paths, but none survived checking the finished geometry. Saying
+    # so beats returning a route the map contradicts.
+    if not candidates:
+        if rejected:
+            worst = max(rejected, key=lambda v: v.impassable_intersections + v.land_intersections)
+            raise NoRouteFound(
+                "No valid route: every corridor the planner found crosses water this hull "
+                f"cannot work. Peak concentration on the best attempt was {worst.max_sic_pct:.0f}%, "
+                f"against a {worst.navigable_limit_pct:.0f}% limit."
+            )
+        raise no_corridor()
 
     n_risk = norm(lambda m: m["risk_score"])
     n_fuel, n_eta = norm(lambda m: m["fuel"].tonnes), norm(lambda m: m["eta_hours"])
@@ -938,10 +1173,15 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     for r in routes:
         si = r.sea_ice_exposure
         if si.impassable_pct > 0:
+            # The route is inside ice the chart calls IMPASSABLE but that this
+            # hull is rated to work. Say exactly that, rather than the old
+            # wording, which claimed nothing was ever blocked -- it now is.
             warnings.append(
-                f"{r.label}: {si.impassable_pct:.0f}% of the route ({si.impassable_pct / 100 * r.distance_km:.0f} km) "
-                f"is in IMPASSABLE ice (SIC > {thresholds.restricted_max:.0%}) for {si.vessel_ice_class}; "
-                "impassable cells are penalised, not hard-blocked, so the station approach remains reachable."
+                f"{r.label}: {si.impassable_pct:.0f}% of the route "
+                f"({si.impassable_pct / 100 * r.distance_km:.0f} km) is in ice over "
+                f"{thresholds.restricted_max:.0%} concentration. This is within the "
+                f"{si.navigable_limit_pct:.0f}% working limit of a {si.vessel_ice_class} hull; "
+                "water beyond that limit is blocked to the router outright."
             )
 
     for r in routes:

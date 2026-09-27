@@ -29,6 +29,9 @@ interface SeaIceLayerProps {
   /** Below this concentration nothing is drawn -- open water stays open. */
   minConcentration?: number;
   opacity?: number;
+  /** Fraction (0-1). Cells above it are drawn as blocked for this hull --
+   *  the same figure the backend used to block the router. */
+  navigableLimit?: number;
 }
 
 /** Passability band colors, running cold-to-warm as the hull's margin narrows.
@@ -45,6 +48,16 @@ export const ICE_BAND_COLORS = {
   IMPASSABLE: '#b06a5c',
 } as const;
 
+/** Water beyond the selected hull's working limit: the router treats these
+ *  cells as unavailable, so the map has to look unavailable too.
+ *
+ *  This is the band that carries the invariant. The four bands above describe
+ *  the ICE -- a physical fact about the water. This one describes what THIS
+ *  vessel may do about it, using the same `navigable_limit_pct` the backend
+ *  blocked the router with, so "the map says blocked" and "the router refused
+ *  it" are the same statement rather than two opinions. */
+export const BLOCKED_BAND_COLOR = '#8f3f39';
+
 /** Degrees of latitude over which the raster fades out at the grid's northern
  *  limit, so the edge of the data doesn't read as a hard ice edge. */
 const EDGE_FADE_DEG = 7;
@@ -52,6 +65,13 @@ const EDGE_FADE_DEG = 7;
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** True when this concentration is beyond the hull's limit. Mirrors
+ *  `boreas_core.mission.passability.is_navigable`; the limit itself is not
+ *  re-derived here, it arrives on the plan response. */
+export function isBlockedForVessel(sic: number, navigableLimit: number): boolean {
+  return sic > navigableLimit;
 }
 
 export function bandForSic(sic: number, t: IceThresholds): keyof typeof ICE_BAND_COLORS {
@@ -67,6 +87,7 @@ export const SeaIceLayer = ({
   grid,
   thresholds,
   minConcentration = 0.08,
+  navigableLimit = 1,
   // Enough presence to read the bands, low enough that terrain, routes and
   // hazards all still come through the raster.
   opacity = 0.55,
@@ -114,7 +135,9 @@ export const SeaIceLayer = ({
           continue;
         }
 
-        const [r, g, b] = hexToRgb(ICE_BAND_COLORS[bandForSic(sic, thresholds)]);
+        const [r, g, b] = isBlockedForVessel(sic, navigableLimit)
+          ? hexToRgb(BLOCKED_BAND_COLOR)
+          : hexToRgb(ICE_BAND_COLORS[bandForSic(sic, thresholds)]);
         imageData.data[idx] = r;
         imageData.data[idx + 1] = g;
         imageData.data[idx + 2] = b;

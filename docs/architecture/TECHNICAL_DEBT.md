@@ -227,3 +227,20 @@ This document provides a categorized, evidence-based audit of technical debt, la
 - **Evidence**: Replanning from (18.43°E, 34.48°S) produced a route whose second waypoint was (18.0°E, 34.0°S) — north-west of the start, so the vessel briefly steers away from the destination before turning east.
 - **Analysis**: The custom start position is snapped to the coarse navigation grid, and from that cell A* genuinely finds its cheapest path out through a neighbouring coastal cell. The cost is real, not an artifact of the state machine; it is simply visible because it happens at the very first leg. Roughly 60 km on a 5,900 km passage.
 - **Impact**: Looks like the vessel is going backwards immediately after a replan near port. A finer grid near the coast, or seeding the search with the vessel's current heading, would remove it.
+
+
+## 10. Sea-Ice Passability
+
+### TD-21: The Simulated Sea-Ice Field Has No Longitudinal Structure
+- **Category**: Model Fidelity
+- **Location**: `boreas_core/forecast/sea_ice.py`
+- **Evidence**: Concentration varies almost purely with latitude — at 68°S the whole domain is 85–99%, at 71°S it is 98–100%, and min/max within a latitude row differ by only a few percent. Below ~68°S the field exceeds 90% at *every* longitude.
+- **Analysis**: This is the same structural gap weather had before eastward-tracking lows were added (TD-16). A latitude band cannot be steered around, so "route around the heavy ice" is impossible by construction: there is nothing to go around. The consequence is that hull capability, not route choice, decides reachability — an ice-strengthened ship cannot reach either station at any longitude, and route alternatives never differ in their ice exposure.
+- **Impact**: The blocked-corridor behaviour is real but cannot be demonstrated on the shipped field; `test_router_goes_around_a_blocked_corridor` builds a synthetic wall with a gap to prove it. Giving the sea-ice model polynyas or a wavy ice edge would make ice a genuine routing decision rather than a latitude gate.
+
+### TD-22: Only a Heavy Icebreaker Can Reach Either Station
+- **Category**: Product Consequence (working as modelled)
+- **Location**: `boreas_core/mission/passability.py`, `forecast/sea_ice.py`
+- **Evidence**: Bharati 98.5%, Maitri 100% concentration. With vessel-relative limits, `HEAVY_ICEBREAKER` (100%) reaches both; `ICE_STRENGTHENED` (90%) and `LIMITED_ICE_CAPABILITY` (80%) reach neither, at any horizon.
+- **Analysis**: Physically defensible — a 1990 ice-strengthened cargo ship genuinely cannot force 100% fast ice — and the planner explains the refusal rather than failing silently. But it means the capability model is effectively binary on this field: there is no leg where the middle tier is the interesting answer. Coupled to TD-21; a field with polynyas would give the middle tier somewhere to be useful.
+- **Impact**: Selecting a non-icebreaker returns `NoRouteFound` for every mission. Intended, but worth knowing before treating it as a bug.

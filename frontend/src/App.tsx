@@ -273,6 +273,9 @@ function App() {
               viewer={v}
               visible={showIce}
               grid={seaIce}
+              // The SAME limit the backend blocked the router with, so a cell
+              // the map shades as blocked is a cell no route can enter.
+              navigableLimit={(displayedRoute?.sea_ice_exposure.navigable_limit_pct ?? 100) / 100}
               thresholds={
                 plan?.ice_thresholds ?? {
                   passable_max: 0.3,
@@ -359,6 +362,7 @@ function App() {
       </MissionGlobe>
 
       <MapLegend
+        navigableLimitPct={displayedRoute?.sea_ice_exposure.navigable_limit_pct ?? null}
         phase={phase}
         showIce={showIce}
         hasHazards={showIcebergs && Boolean(selectedRoute?.iceberg_exposure.relevant_icebergs.length)}

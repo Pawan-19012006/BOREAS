@@ -8,6 +8,12 @@ ones. `boreas_core.coordination` also keeps process-global mutable state (an
 in-memory active-route / route-update store keyed by vessel_id), so each
 test is assigned its own dedicated roster vessel to avoid cross-test
 interference rather than resetting module globals.
+
+Every vessel used here is a HEAVY_ICEBREAKER. Sea-ice passability is now
+vessel-relative (see `mission/passability.py`), and both stations sit in
+98-100% fast ice, so an ice-strengthened hull cannot plan a route to either --
+which would fail these tests for a reason that has nothing to do with
+coordination. Passability itself is covered in test_passability_consistency.py.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -82,7 +88,7 @@ def test_active_route_404_before_activation():
 
 
 def test_vessel_state_starts_at_route_origin_and_advances():
-    vessel_id = "sir_david_attenborough"
+    vessel_id = "akademik_fedorov"
     _, route, _ = _activate(vessel_id)
 
     fresh = client.get(f"/coordination/vessel-state/{vessel_id}").json()
@@ -173,7 +179,7 @@ def test_simulate_environment_change_without_active_route_404s():
 
 
 def test_full_accept_workflow_ship_continues_from_current_position():
-    vessel_id = "ivan_papanin"
+    vessel_id = "nuyina"
     _, old_route, _ = _activate(vessel_id)
     _backdate(vessel_id, seconds=20)
 
@@ -277,7 +283,7 @@ def test_respond_to_unknown_update_404s():
 
 
 def test_list_route_updates_filters_by_vessel_and_status():
-    vessel_a, vessel_b = "akademik_fedorov", "agulhas_ii"
+    vessel_a, vessel_b = "akademik_fedorov", "kronprins_haakon"
     _activate(vessel_a)
     _activate(vessel_b)
 
@@ -301,7 +307,7 @@ def test_exactly_one_active_route_survives_acceptance():
     """The core invariant: accepting REPLACES the active route. The superseded
     route must not remain active anywhere in the canonical store, because that
     is what let Shore draw two competing routes at once."""
-    vessel_id = "agulhas_ii"
+    vessel_id = "le_commandant_charcot"
     _, old_route, _ = _activate(vessel_id)
     _backdate(vessel_id, seconds=25)
 
@@ -443,7 +449,7 @@ def test_planning_alone_does_not_start_telemetry():
 def test_activation_starts_the_clock_running():
     """START NAVIGATION is the single commit: activating the route is what puts
     the vessel under way, with telemetry live from that moment."""
-    vessel_id = "agulhas_ii"
+    vessel_id = "xue_long_2"
     _activate(vessel_id)
     state = client.get(f"/coordination/vessel-state/{vessel_id}").json()
     assert state["is_under_way"] is True
@@ -475,7 +481,7 @@ def test_one_times_speed_is_slow_and_the_multiplier_scales_it():
 def test_speed_change_does_not_rewrite_distance_already_sailed():
     """Switching to 12x must accelerate what happens NEXT, not retroactively
     rescale the voyage so far."""
-    vessel_id = "agulhas_ii"
+    vessel_id = "xue_long_2"
     _activate(vessel_id)
     _backdate(vessel_id, seconds=20)
     before = client.get(f"/coordination/vessel-state/{vessel_id}").json()["distance_travelled_km"]
@@ -488,7 +494,7 @@ def test_speed_change_does_not_rewrite_distance_already_sailed():
 
 
 def test_rejects_an_unsupported_speed_multiplier():
-    vessel_id = "agulhas_ii"
+    vessel_id = "xue_long_2"
     _activate(vessel_id)
     assert (
         client.post(f"/coordination/vessel-state/{vessel_id}/speed", json={"multiplier": 7}).status_code
@@ -586,7 +592,7 @@ def test_decline_resumes_movement_on_the_original_route():
 
 def test_shore_and_ship_read_one_vessel_state():
     """There is a single canonical state; two readers cannot disagree."""
-    vessel_id = "agulhas_ii"
+    vessel_id = "xue_long_2"
     _activate(vessel_id)
     _backdate(vessel_id, seconds=15)
     # Freeze so the two reads are not separated by real elapsed time.
