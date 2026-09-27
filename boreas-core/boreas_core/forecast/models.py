@@ -76,3 +76,41 @@ class FutureStateResponse(BaseModel):
     environment: EnvironmentalForecastPoint = Field(..., description="Projected environmental state at T+h")
     overall_confidence: float = Field(..., ge=0.0, le=1.0, description="Fused state confidence score")
     provenance: dict[str, str] = Field(..., description="Provenance disclosures across domains")
+
+
+class WeatherHotspot(BaseModel):
+    """A contiguous region where forecast weather severity is a navigation
+    concern. Every field is either measured off the simulated forecast field or
+    computed from it -- nothing is a placeholder."""
+
+    hotspot_id: str = Field(..., description="Stable id within a horizon, e.g. WX-024-01")
+    longitude: float = Field(..., description="Severity- and area-weighted centre longitude")
+    latitude: float = Field(..., description="Severity- and area-weighted centre latitude")
+    radius_km: float = Field(..., ge=0.0, description="Radius of the equal-area circle")
+    area_km2: float = Field(..., ge=0.0, description="True affected area of the region")
+    severity: str = Field(..., description="CAUTION | SEVERE | EXTREME (worst cell in the region)")
+    severity_score: float = Field(..., ge=0.0, le=1.0, description="Peak internal severity score")
+    mean_severity_score: float = Field(..., ge=0.0, le=1.0, description="Mean severity across the region")
+    forecast_horizon_hours: int = Field(..., ge=0)
+    valid_time: str = Field(..., description="ISO 8601 UTC time this region is valid for")
+    wind_speed_kt: float = Field(..., ge=0.0, description="Wind at the region's worst cell")
+    wave_height_m: float = Field(..., ge=0.0, description="Significant wave height at the worst cell")
+    visibility_nm: float = Field(..., ge=0.0, description="Visibility at the worst cell")
+    pressure_hpa: float = Field(..., description="Mean sea level pressure at the worst cell")
+    primary_driver: str = Field(..., description="HIGH_WIND | HEAVY_SEAS | LOW_VISIBILITY | CALM")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Inherited forecast confidence at this horizon")
+    cell_count: int = Field(..., ge=1, description="Grid cells forming the region")
+    source: str = Field(..., description="SIMULATED — no real weather provider is connected")
+    mode: str = Field(..., description="REAL | DEMO")
+    provenance: str = Field(..., description="Truthful disclosure of meteorological basis")
+
+
+class WeatherHotspotResponse(BaseModel):
+    horizon_hours: int = Field(..., ge=0)
+    valid_time: str = Field(..., description="ISO 8601 UTC time these hotspots are valid for")
+    hotspots: list[WeatherHotspot] = Field(..., description="Worst region first; empty when weather is normal")
+    background: EnvironmentalForecastPoint = Field(..., description="Domain background synoptic state")
+    thresholds: dict[str, float] = Field(..., description="Severity thresholds used, for transparency")
+    source: str = Field(..., description="SIMULATED — no real weather provider is connected")
+    mode: str = Field(..., description="REAL | DEMO")
+    provenance: str = Field(...)

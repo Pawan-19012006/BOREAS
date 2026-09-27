@@ -17,11 +17,20 @@ import numpy as np
 
 from boreas_core.forecast.models import EnvironmentalForecastPoint
 from boreas_core.forecast.service import get_future_state, get_iceberg_forecasts
+from boreas_core.forecast.weather_field import evaluate_weather
+from boreas_core.forecast.weather_severity import (
+    CAUTION_SEVERITY,
+    EXTREME_SEVERITY,
+    SEVERE_SEVERITY,
+    weather_severity,
+)
 from boreas_core.observe.service import get_observed_icebergs
 from boreas_core.routing.grid import EARTH_RADIUS_KM, RiskGrid
 
 from .config import (
     BERG_RISK_FACTOR,
+    WEATHER_EXTREME_BLOCKS,
+    WEATHER_RISK_BY_CATEGORY,
     DOMAIN_LAT_RANGE,
     DOMAIN_LON_RANGE,
     DOMAIN_RESOLUTION_DEG,
@@ -177,6 +186,9 @@ class FieldSet:
     fuel_extra: np.ndarray  # additive environmental fuel multiplier (>= 0)
     wave_m: np.ndarray
     wind_kt: np.ndarray
+    visibility_nm: np.ndarray
+    pressure_hpa: np.ndarray
+    wx_severity: np.ndarray  # continuous 0-1 weather severity score
 
 
 _SIC_KNOTS = [0.0, 0.15, 0.30, 0.60, 0.80, 1.0]
@@ -186,11 +198,28 @@ _ICE_SPEED_LOSS = [0.0, 0.0, 0.15, 0.45, 0.70, 0.85]
 FUEL_EXTRA_NORM = 1.5  # plausible maximum, used to normalise the fuel penalty
 
 
-def latitude_weather_factor(lat) -> np.ndarray:
-    """Prototype spatial scaling of the (spatially uniform) simulated synoptic
-    state: strongest in the westerly belt, weaker toward the coast and the
-    sub-tropics. Not a weather model."""
-    return np.interp(lat, [-71.0, -65.0, -60.0, -40.0, -33.0], [0.6, 0.8, 1.0, 1.0, 0.7])
+def _weather_risk_from_severity(severity) -> np.ndarray:
+    """Map the continuous weather severity score onto navigation risk using the
+    per-category multipliers in `config.WEATHER_RISK_BY_CATEGORY`.
+
+    Interpolating between the category anchors rather than stepping at them keeps
+    the A* cost field smooth -- a hard step at a threshold would put a cliff in
+    the cost surface and make the chosen route hypersensitive to a rounding-level
+    change in severity. The anchors themselves are exactly the values the UI
+    shows, so category and cost never disagree.
+
+    When `WEATHER_EXTREME_BLOCKS` is set, EXTREME severity is pushed to 1.0 so the
+    planner's own land/blocked handling treats it as a hard constraint.
+    """
+    w = WEATHER_RISK_BY_CATEGORY
+    risk = np.interp(
+        np.asarray(severity, dtype=float),
+        [0.0, CAUTION_SEVERITY, SEVERE_SEVERITY, EXTREME_SEVERITY],
+        [w["NORMAL"], w["CAUTION"], w["SEVERE"], w["EXTREME"]],
+    )
+    if WEATHER_EXTREME_BLOCKS:
+        risk = np.where(np.asarray(severity, dtype=float) >= EXTREME_SEVERITY, 1.0, risk)
+    return risk
 
 
 class FieldModel:
@@ -225,16 +254,20 @@ class FieldModel:
         ice_speed_loss = np.interp(sic, _SIC_KNOTS, _ICE_SPEED_LOSS) * p.ice_resistance_scale
         ice_fuel = np.interp(sic, _SIC_KNOTS, _ICE_FUEL) * p.ice_resistance_scale
 
-        wf = latitude_weather_factor(np.asarray(lat, dtype=float))
-        wave = env.wave_height_m * wf
-        wind = env.wind_speed_kt * wf
-        wx_risk = np.clip(
-            0.55 * np.clip((wave - 2.0) / 4.0, 0.0, 1.0)
-            + 0.30 * np.clip((wind - 20.0) / 25.0, 0.0, 1.0)
-            + 0.15 * np.clip((5.0 - env.visibility_nm) / 3.0, 0.0, 1.0),
-            0.0,
-            1.0,
-        )
+        # Spatial weather: the background synoptic state (env) with the simulated
+        # low-pressure systems superimposed. Reusing the snapshot's own `env` as
+        # the background means the cost field A* optimises and the environmental
+        # state the response reports are derived from the same forecast.
+        wx = evaluate_weather(lon, lat, self.snapshot.horizon_hours, background=env)
+        wave = wx.wave_m
+        wind = wx.wind_kt
+        visibility = wx.visibility_nm
+
+        # One severity score, one threshold table, shared with hotspot detection
+        # and the UI -- so a region the map calls SEVERE is the same region the
+        # router paid a SEVERE penalty to cross.
+        severity = weather_severity(wind, wave, visibility)
+        wx_risk = np.clip(_weather_risk_from_severity(severity), 0.0, 1.0)
         wave_speed_factor = np.clip(1.0 - 0.06 * np.maximum(0.0, wave - 2.0), 0.6, 1.0)
         wave_fuel = 0.05 * np.maximum(0.0, wave - 1.0)
 
@@ -251,4 +284,7 @@ class FieldModel:
             fuel_extra=ice_fuel + wave_fuel,
             wave_m=wave,
             wind_kt=wind,
+            visibility_nm=visibility,
+            pressure_hpa=wx.pressure_hpa,
+            wx_severity=np.asarray(severity, dtype=float),
         )

@@ -15,6 +15,7 @@ import NavigationPanel from './components/mission/NavigationPanel';
 import MapLegend from './components/mission/MapLegend';
 import MapLayerControls from './components/mission/MapLayerControls';
 import IcebergInspector from './components/mission/IcebergInspector';
+import WeatherHotspotInspector from './components/mission/WeatherHotspotInspector';
 import FleetMonitoringPanel from './components/mission/FleetMonitoringPanel';
 import DataProvenancePanel from './components/mission/DataProvenancePanel';
 import { ForecastTimeline } from './components/ForecastTimeline';
@@ -26,6 +27,7 @@ import VesselNavLayer from './layers/VesselNavLayer';
 import IcebergLayer from './layers/IcebergLayer';
 import SatelliteImageryLayer from './layers/SatelliteImageryLayer';
 import RouteDeviationLayer from './layers/RouteDeviationLayer';
+import WeatherHotspotLayer from './layers/WeatherHotspotLayer';
 
 import { useMissionPlanner } from './hooks/useMissionPlanner';
 import { useMissionHazards } from './hooks/useMissionHazards';
@@ -33,6 +35,7 @@ import { useMissionCamera } from './hooks/useMissionCamera';
 import { useObserveIntelligence } from './hooks/useObserveIntelligence';
 import { useForecastState } from './hooks/useForecastState';
 import { useSelectedEntity } from './hooks/useSelectedEntity';
+import { useWeatherHotspots } from './hooks/useWeatherHotspots';
 import { useSatelliteStatus } from './hooks/useSatelliteStatus';
 import { useFleetMonitoring } from './hooks/useFleetMonitoring';
 import { useBackendStatus } from './services/backendStatus';
@@ -50,6 +53,7 @@ export interface LayerVisibility {
   routes: boolean;
   icebergs: boolean;
   seaIce: boolean;
+  weather: boolean;
   satellite: boolean;
 }
 
@@ -57,6 +61,9 @@ const DEFAULT_LAYER_VISIBILITY: LayerVisibility = {
   routes: true,
   icebergs: true,
   seaIce: true,
+  // On by default: the hotspots are already part of the route cost the operator
+  // is looking at, so hiding them by default would leave route bends unexplained.
+  weather: true,
   // Off by default: enabling it makes a real CDSE fetch, and the honesty
   // contract means it should be an explicit operator action, not a surprise
   // blank/slow layer on load if credentials aren't configured.
@@ -89,6 +96,9 @@ function App() {
   // horizon is driven by the shared `selectedHorizon` state above instead.
   const { icebergForecasts } = useForecastState();
   const satellite = useSatelliteStatus();
+  // Hotspots follow the SAME horizon selector as sea ice and icebergs -- there is
+  // no separate weather timeline.
+  const weather = useWeatherHotspots(selectedHorizon);
   const [selection, setSelection] = useSelectedEntity(viewer);
   // Shore's half of the shore<->ship coordination workflow -- additive to the
   // phase machine above, not part of it: available once a plan exists,
@@ -225,6 +235,12 @@ function App() {
               selectedHorizon={selectedHorizon}
             />
 
+            <WeatherHotspotLayer
+              viewer={v}
+              visible={layerVisibility.weather}
+              hotspots={weather.hotspots}
+            />
+
             {selectedRoute && layerVisibility.routes && (
               <RouteDeviationLayer
                 viewer={v}
@@ -286,6 +302,7 @@ function App() {
           visibility={layerVisibility}
           onToggle={toggleLayer}
           satelliteState={satellite.stateFor('sentinel-1')}
+          weatherState={weather.state}
           onOpenProvenance={() => setProvenanceOpen(true)}
         />
       )}
@@ -307,6 +324,14 @@ function App() {
         />
       )}
 
+      {selection?.kind === 'weather' && (
+        <WeatherHotspotInspector
+          hotspot={weather.hotspots.find((h) => h.hotspot_id === selection.id)}
+          route={selectedRoute}
+          onClose={() => setSelection(null)}
+        />
+      )}
+
       {phase !== 'setup' && (
         <FleetMonitoringPanel plan={plan} selectedRoute={selectedRoute} monitoring={monitoring} />
       )}
@@ -314,6 +339,7 @@ function App() {
       {isProvenanceOpen && (
         <DataProvenancePanel
           satellite={satellite.primarySource()}
+          weather={weather}
           route={selectedRoute}
           horizonHours={selectedHorizon}
           onClose={() => setProvenanceOpen(false)}

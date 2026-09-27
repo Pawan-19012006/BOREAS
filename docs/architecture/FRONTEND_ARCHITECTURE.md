@@ -175,6 +175,17 @@ explorer-only layers that remain unmounted still use the naive pattern.
   applies, not an operator preference — and every displayed value comes from the `/mission/plan`
   response. "Why the track bends" lists the route's `deviations`, filtering out `NAVIGATION_COST`
   so no bend is given a hazard explanation it does not have.
+- `layers/WeatherHotspotLayer.tsx` + `hooks/useWeatherHotspots.ts` +
+  `components/mission/WeatherHotspotInspector.tsx`: forecast severe-weather regions from
+  `GET /forecast/weather/hotspots`, drawn as translucent weather cells (low-alpha fill, defined
+  edge, warning glyph and conditions at the centre) rather than pins — a region can span a thousand
+  km and must not bury the route beneath it, so the saturated palette stays reserved for point
+  hazards. Severity colours are shared with `.wx-severity-tag` in CSS so a tag in a panel matches
+  the area on the globe. The layer follows the SAME `selectedHorizon` as sea ice and icebergs — there
+  is no separate weather timeline. Entities are tagged `weather:<id>` so the existing
+  `useSelectedEntity` listener drives the inspector. The Weather pill carries a four-state tag
+  (`Real feed` / `Simulated` / `Not configured` / `Forecast unavailable`); a failed request reports
+  CONNECTION_ERROR rather than being flattened into "simulated".
 - `layers/RouteDeviationLayer.tsx`: draws each named deviation on the globe — a bend marker, a
   dashed leader line to the cell that caused it, and the cause label. `NAVIGATION_COST` deviations
   are skipped, so a bend is only annotated when there is a real, nearby hazard to point at.

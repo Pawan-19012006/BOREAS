@@ -118,6 +118,25 @@ class IcebergExposure(BaseModel):
     relevant_icebergs: list[RelevantIceberg]
 
 
+class WeatherHotspotEncounter(BaseModel):
+    """A weather hotspot region this route comes close to or passes through."""
+
+    hotspot_id: str
+    severity: str = Field(..., description="CAUTION | SEVERE | EXTREME")
+    primary_driver: str
+    longitude: float
+    latitude: float
+    radius_km: float
+    distance_km: float = Field(..., description="Closest approach from the route to the region centre")
+    crossed: bool = Field(..., description="True when the route passes inside the region")
+    closest_approach_eta_h: float | None = Field(
+        None, description="Hours from departure at the route's closest point to this region"
+    )
+    wind_speed_kt: float
+    wave_height_m: float
+    valid_time: str
+
+
 class WeatherExposure(BaseModel):
     mean_wave_m: float
     max_wave_m: float
@@ -128,6 +147,17 @@ class WeatherExposure(BaseModel):
     pressure_hpa: float
     high_sea_state_pct: float = Field(..., description="Route distance with waves >= 4 m")
     mean_risk: float
+    exposure_level: str = Field(..., description="LOW | MODERATE | HIGH — operator-facing weather exposure")
+    max_severity: str = Field(..., description="Worst weather category anywhere on the route")
+    hotspots_crossed: int = Field(..., ge=0, description="Hotspot regions the route passes through")
+    closest_severe_hotspot_km: float | None = Field(
+        None, description="Closest approach to a SEVERE or EXTREME region; null when there is none"
+    )
+    hotspot_encounters: list[WeatherHotspotEncounter] = Field(
+        default_factory=list, description="Nearest first; regions the route must reckon with"
+    )
+    source: str = Field(..., description="SIMULATED — no real weather provider is connected")
+    mode: str = Field(..., description="REAL | DEMO")
     provenance: str
 
 
@@ -164,11 +194,14 @@ class RouteDeviation(BaseModel):
     latitude: float
     cause_longitude: float = Field(..., description="The high-cost cell the route steered around")
     cause_latitude: float
-    cause: str = Field(..., description="SEA_ICE | ICEBERG | LAND | NAVIGATION_COST")
+    cause: str = Field(..., description="SEA_ICE | ICEBERG | WEATHER | LAND | NAVIGATION_COST")
     detail: str = Field(..., description="Short operator-facing reason, e.g. 'Sea ice 82% concentration'")
     sic_pct: float | None = None
     iceberg_id: str | None = None
     iceberg_distance_km: float | None = None
+    weather_severity: str | None = Field(None, description="Weather category at the cause cell")
+    wind_speed_kt: float | None = None
+    wave_height_m: float | None = None
 
 
 class RoutePlan(BaseModel):

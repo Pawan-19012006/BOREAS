@@ -9,10 +9,14 @@ from boreas_core.observe.models import ObservedVessel
 from boreas_core.observe.service import get_observed_icebergs, get_observed_vessels
 
 from .environment import EnvironmentalForecastEngine
+from .weather_field import WEATHER_PROVENANCE
+from .weather_hotspots import detect_hotspots
+from .weather_severity import CAUTION_SEVERITY, EXTREME_SEVERITY, SEVERE_SEVERITY
 from .iceberg import IcebergTrajectoryEngine
 from .models import (
     EnvironmentalForecastPoint,
     EnvironmentalForecastResponse,
+    WeatherHotspotResponse,
     FutureStateResponse,
     IcebergForecast,
     SeaIceForecastResponse,
@@ -140,4 +144,32 @@ def get_future_state(horizon_hours: int = 72) -> FutureStateResponse:
         environment=env_res,
         overall_confidence=overall_conf,
         provenance=provenance,
+    )
+
+
+def get_weather_hotspots(horizon_hours: int = 0) -> WeatherHotspotResponse:
+    """Weather hotspot regions over the mission navigation domain at T+horizon.
+
+    Uses the same domain axes and the same severity thresholds as the mission
+    planner's cost field, so a region reported here is a region the router
+    actually paid to cross.
+    """
+    from boreas_core.mission.fields import domain_axes
+
+    lons, lats = domain_axes()
+    hotspots = detect_hotspots(lons, lats, horizon_hours)
+    background = _environment_engine.predict_at_horizon(horizon_hours=horizon_hours)
+    return WeatherHotspotResponse(
+        horizon_hours=horizon_hours,
+        valid_time=background.timestamp,
+        hotspots=hotspots,
+        background=background,
+        thresholds={
+            "caution": CAUTION_SEVERITY,
+            "severe": SEVERE_SEVERITY,
+            "extreme": EXTREME_SEVERITY,
+        },
+        source="SIMULATED",
+        mode="DEMO",
+        provenance=WEATHER_PROVENANCE,
     )

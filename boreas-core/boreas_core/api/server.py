@@ -37,6 +37,7 @@ from boreas_core.observe import (
 from boreas_core.state import CurrentState, get_current_state
 from boreas_core.forecast import (
     EnvironmentalForecastResponse,
+    WeatherHotspotResponse,
     FutureStateResponse,
     IcebergForecast,
     SeaIceForecastResponse,
@@ -44,7 +45,9 @@ from boreas_core.forecast import (
     get_future_state,
     get_iceberg_forecasts,
     get_sea_ice_forecast,
+    get_weather_hotspots,
 )
+from boreas_core.mission.config import VALID_HORIZONS_HOURS
 from boreas_core.mission import (
     MissionPlanRequest,
     MissionPlanResponse,
@@ -272,6 +275,28 @@ def forecast_sea_ice(horizon_hours: int = 72) -> SeaIceForecastResponse:
 def forecast_environment(horizon_hours: int | None = None) -> EnvironmentalForecastResponse:
     """Atmospheric and wave forcing forecast across horizons (+12h to +120h)."""
     return get_environmental_forecast(horizon_hours=horizon_hours)
+
+
+@app.get("/forecast/weather/hotspots", response_model=WeatherHotspotResponse)
+def forecast_weather_hotspots(horizon_hours: int = 0) -> WeatherHotspotResponse:
+    """Contiguous regions where forecast weather severity is a navigation concern
+    at T+horizon.
+
+    These are the SAME regions the mission planner pays a routing cost to cross --
+    severity, thresholds and the cost multipliers all come from
+    `boreas_core.forecast.weather_severity` and `mission.config`, so the map and
+    the router cannot disagree. Returns an empty list when weather is normal; no
+    hotspot is invented to fill the map.
+
+    The weather field is SIMULATED (`mode: "DEMO"`). No real forecast provider is
+    connected to BOREAS.
+    """
+    if horizon_hours not in VALID_HORIZONS_HOURS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"horizon_hours must be one of {list(VALID_HORIZONS_HOURS)}",
+        )
+    return get_weather_hotspots(horizon_hours=horizon_hours)
 
 
 @app.get("/forecast/state", response_model=FutureStateResponse)

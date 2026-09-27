@@ -843,6 +843,10 @@ input[type='range']::-moz-range-thumb {
   color: var(--signal);
 }
 
+.deviation-cause[data-cause='WEATHER'] {
+  color: var(--warn, #d9a05b);
+}
+
 .deviation-cause[data-cause='LAND'] {
   color: var(--ink-dim);
 }
@@ -1363,7 +1367,8 @@ input[type='range']::-moz-range-thumb {
 
 /* ============================ Iceberg inspector ============================ */
 
-.iceberg-inspector {
+.iceberg-inspector,
+.weather-inspector {
   position: absolute;
   top: calc(52px + var(--space-3));
   /* Docked just to the left of the main side panel, not on top of it --
@@ -1383,7 +1388,8 @@ input[type='range']::-moz-range-thumb {
 }
 
 @media (max-width: 900px) {
-  .iceberg-inspector {
+  .iceberg-inspector,
+  .weather-inspector {
     left: var(--space-2);
     right: var(--space-2);
     width: auto;
@@ -1623,4 +1629,87 @@ input[type='range']::-moz-range-thumb {
     grid-template-columns: repeat(2, 1fr);
     gap: var(--space-3) var(--space-2);
   }
+}
+
+
+/* ======================== Weather hotspots ========================= */
+
+/* Severity palette matches WeatherHotspotLayer's Cesium colours exactly, so a
+   region's tag in a panel is the same colour as the area drawn on the globe. */
+.wx-severity-tag {
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.wx-severity-tag[data-severity='CAUTION'] {
+  color: #cfc79a;
+}
+
+.wx-severity-tag[data-severity='SEVERE'] {
+  color: #d9a05b;
+}
+
+.wx-severity-tag[data-severity='EXTREME'] {
+  color: #c4705f;
+}
+
+.wx-severity-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+/* Weather exposure on a route card: a dot rather than another coloured pill,
+   so the card's single risk chip keeps its prominence. */
+.wx-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  background: var(--ink-dim);
+}
+
+.wx-dot[data-level='MODERATE'] {
+  background: #d9a05b;
+}
+
+.wx-dot[data-level='HIGH'] {
+  background: #c4705f;
+}
+
+.wx-encounters {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wx-encounter {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wx-encounter-detail {
+  color: var(--ink-muted);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.weather-inspector dl,
+.weather-inspector .provenance {
+  padding-left: var(--space-4);
+  padding-right: var(--space-4);
 }

@@ -176,3 +176,27 @@ This document provides a categorized, evidence-based audit of technical debt, la
 - **Evidence**: The public CDSE STAC search takes ~18 s for the mission bounding box; the timeout had to be raised to 40 s.
 - **Analysis**: Masked by a 15-minute success cache / 60-second failure cache, but the first probe after start-up (and every `refresh=true`) blocks that request.
 - **Impact**: Slow first `/satellite/status` response; a narrower bbox or a datetime-bounded query would likely help.
+
+
+## 8. Weather Hotspots
+
+### TD-15: Weather Routing Is Single-Horizon, Not Time-Dependent
+- **Category**: Model Fidelity / Honest Limitation
+- **Location**: `boreas_core/mission/fields.py` (`FieldModel.evaluate`), `forecast/weather_field.py`
+- **Evidence**: `build_snapshot(horizon)` produces one hazard state and `FieldModel` applies it to the entire transit. A Cape Town -> Bharati leg takes 12-14 days, so a route costed at T+24h is being judged against weather that will have moved on long before the vessel reaches the far end.
+- **Analysis**: Proper time-dependent routing needs a time-expanded search (cost of entering a cell depends on arrival time there), which the current A* over a static risk grid cannot express. The systems already translate with the horizon, so the machinery for a time-varying field exists; the SEARCH is what is single-snapshot. `hotspot_encounters[].closest_approach_eta_h` is reported specifically so the gap between "when the vessel gets there" and "when the field is valid" is visible rather than concealed.
+- **Impact**: Weather avoidance is directionally right but temporally naive. Identical to the pre-existing treatment of sea ice and icebergs, so this is not a weather-specific regression.
+
+### TD-16: The Weather Field Is Simulated, Not a Forecast
+- **Category**: Data Provenance
+- **Location**: `boreas_core/forecast/weather_field.py`, `environment.py`
+- **Evidence**: No real weather provider is integrated anywhere in the repo. Wind, wave, visibility and pressure all come from a deterministic synoptic simulation with four seeded low-pressure systems.
+- **Analysis**: Labelled throughout as `SIMULATED` / `DEMO` (`WEATHER_PROVENANCE`, the `mode` field on every hotspot and on `weather_exposure`, the `Simulated` pill on the Weather layer toggle, and an explicit DEMO MODE notice in the provenance panel). The seed positions are scenario placement, chosen so both mission corridors meet weather at T+0 — the same approach as the seeded iceberg roster.
+- **Impact**: Hotspots are not real-world weather and must never be presented as such. Wiring a real provider (Open-Meteo marine needs no key) would replace `weather_field.evaluate_weather` behind the same interface, and the four-state weather status in `useWeatherHotspots` is already shaped for it.
+
+### TD-17: Wave Height Dominates Severity, So `primary_driver` Is Usually HEAVY_SEAS
+- **Category**: Explanation Quality
+- **Location**: `boreas_core/forecast/weather_severity.py`
+- **Evidence**: Wave height carries weight 0.50 and is diagnosed from local wind (~0.14 x wind_kt), so in a strong system both the wind and wave terms saturate and the wave term wins on weight alone. `LOW_VISIBILITY` (weight 0.16) can never be the dominant driver in the current field.
+- **Analysis**: Defensible — significant wave height really is what forces a vessel to slow or alter course — but it makes the driver label carry less information than it could. A real forecast feed with independent wave and visibility fields would fix this without changing the severity model.
+- **Impact**: The `primary_driver` field is less discriminating than the four-value enum suggests.

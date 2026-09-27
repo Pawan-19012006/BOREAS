@@ -108,7 +108,12 @@ function RouteCard({
         <span className="exposure-item">
           {hotBergs === 0 ? 'No icebergs' : `${hotBergs} iceberg${hotBergs > 1 ? 's' : ''}`}
         </span>
-        <span className="exposure-item">{route.weather_exposure.max_wave_m.toFixed(1)} m seas</span>
+        <span className="exposure-item">
+          <span className="wx-dot" data-level={route.weather_exposure.exposure_level} />
+          {route.weather_exposure.exposure_level === 'LOW' ? 'Weather low' : `Weather ${route.weather_exposure.exposure_level.toLowerCase()}`}
+          {' · '}
+          {route.weather_exposure.max_wave_m.toFixed(1)} m
+        </span>
       </div>
 
       {/* The cost of choosing this instead of the advised route, on the card
@@ -365,7 +370,43 @@ export const RouteOptionsPanel = ({
               <dt>Visibility</dt>
               <dd>{weather.min_visibility_nm.toFixed(1)} NM</dd>
             </div>
+            <div className="data-row">
+              <dt>Weather exposure</dt>
+              <dd>{weather.exposure_level}</dd>
+            </div>
+            <div className="data-row">
+              <dt>Hotspots crossed</dt>
+              <dd>{weather.hotspots_crossed}</dd>
+            </div>
+            {weather.closest_severe_hotspot_km !== null && (
+              <div className="data-row">
+                <dt>Closest severe hotspot</dt>
+                <dd>{Math.round(weather.closest_severe_hotspot_km)} km</dd>
+              </div>
+            )}
           </dl>
+
+          {/* Named regions this track reckons with, nearest first. These are the
+              same regions drawn on the globe, so the card and the map agree. */}
+          {weather.hotspot_encounters.length > 0 && (
+            <div className="wx-encounters">
+              {weather.hotspot_encounters.map((e) => (
+                <div key={e.hotspot_id} className="wx-encounter">
+                  <span className="wx-severity-tag" data-severity={e.severity}>
+                    {e.severity}
+                  </span>
+                  <span className="wx-encounter-detail">
+                    {e.crossed
+                      ? `crosses ${e.hotspot_id}`
+                      : `clears ${e.hotspot_id} by ${Math.round(e.distance_km)} km`}
+                    {e.closest_approach_eta_h !== null && ` · T+${Math.round(e.closest_approach_eta_h)}h`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="provenance">{weather.provenance}</p>
         </section>
 
         <section className="panel-section">

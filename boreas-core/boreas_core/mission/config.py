@@ -114,6 +114,45 @@ DEVIATION_MIN_PENALTY = 0.08
 # distance the bend is reported as generic navigation cost instead of being
 # pinned on a hazard the operator cannot see near it.
 DEVIATION_MAX_CAUSE_DISTANCE_KM = 400.0
+# Weather gets a larger allowance than point-like hazards. A hotspot region is
+# hundreds of km across and is DRAWN on the globe as a shaded area, so a bend
+# 600 km from its centre is still an explanation the operator can see and verify
+# -- unlike a landmass over the horizon. Sized to the largest hotspot radius the
+# detector produces plus a margin.
+DEVIATION_MAX_WEATHER_CAUSE_DISTANCE_KM = 900.0
+
+
+# --- Weather as a routing cost ------------------------------------------------
+# Weather severity (boreas_core.forecast.weather_severity) enters the same risk
+# field as sea ice and icebergs, so a route that crosses a severe region is
+# genuinely more expensive to A* rather than merely annotated afterwards. These
+# multipliers map the severity score onto navigation risk by category, so the
+# operational categories the UI shows and the cost the router pays come from one
+# table.
+WEATHER_RISK_BY_CATEGORY = {
+    "NORMAL": 0.15,  # open-water weather is never zero-cost, but it is cheap
+    "CAUTION": 0.45,
+    "SEVERE": 0.80,
+    "EXTREME": 1.00,
+}
+
+# Whether an EXTREME region is treated as a hard navigation constraint rather
+# than an expensive one. Off by default: with a coarse 1-degree grid and a
+# simulated weather field, hard-blocking can make a leg infeasible outright,
+# and an operator is better served by a very expensive corridor the router
+# avoids when it practically can. Turn on to treat EXTREME as impassable.
+WEATHER_EXTREME_BLOCKS = False
+
+# How far above the open-water baseline (WEATHER_RISK_BY_CATEGORY["NORMAL"]) a
+# cell's weather risk must sit before a bend may be attributed to weather.
+#
+# A router avoiding a storm turns away on the system's OUTER FLANK, well before
+# the cells it rejects reach CAUTION -- so requiring a CAUTION cell would hide
+# the real cause behind a generic "navigation cost" label. This threshold instead
+# asks the honest question: was weather materially more expensive here than
+# ordinary open water? The wording of such a deviation says "approach to" the
+# named region rather than claiming severe weather at the bend itself.
+WEATHER_DEVIATION_MIN_EXCESS = 0.03
 
 
 # --- Sea-ice passability (PROTOTYPE PASSABILITY MODEL) ---

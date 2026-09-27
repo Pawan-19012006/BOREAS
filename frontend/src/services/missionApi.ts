@@ -119,6 +119,26 @@ export interface IcebergExposure {
   relevant_icebergs: RelevantIceberg[];
 }
 
+export type WeatherSeverity = 'NORMAL' | 'CAUTION' | 'SEVERE' | 'EXTREME';
+export type WeatherExposureLevel = 'LOW' | 'MODERATE' | 'HIGH';
+
+/** A weather hotspot region this route has to reckon with. The same regions the
+ *  map draws and the router paid a cost to avoid. */
+export interface WeatherHotspotEncounter {
+  hotspot_id: string;
+  severity: WeatherSeverity;
+  primary_driver: string;
+  longitude: number;
+  latitude: number;
+  radius_km: number;
+  distance_km: number;
+  crossed: boolean;
+  closest_approach_eta_h: number | null;
+  wind_speed_kt: number;
+  wave_height_m: number;
+  valid_time: string;
+}
+
 export interface WeatherExposure {
   mean_wave_m: number;
   max_wave_m: number;
@@ -129,6 +149,13 @@ export interface WeatherExposure {
   pressure_hpa: number;
   high_sea_state_pct: number;
   mean_risk: number;
+  exposure_level: WeatherExposureLevel;
+  max_severity: WeatherSeverity;
+  hotspots_crossed: number;
+  closest_severe_hotspot_km: number | null;
+  hotspot_encounters: WeatherHotspotEncounter[];
+  source: string;
+  mode: string;
   provenance: string;
 }
 
@@ -151,7 +178,7 @@ export interface RiskAcceptability {
   within_constraint: boolean;
 }
 
-export type DeviationCause = 'SEA_ICE' | 'ICEBERG' | 'LAND' | 'NAVIGATION_COST';
+export type DeviationCause = 'SEA_ICE' | 'ICEBERG' | 'WEATHER' | 'LAND' | 'NAVIGATION_COST';
 
 /** A bend the route genuinely needed, plus the environmental cost that caused
  *  it. The backend only emits these where a shortcut was actually rejected, so
@@ -166,6 +193,9 @@ export interface RouteDeviation {
   sic_pct: number | null;
   iceberg_id: string | null;
   iceberg_distance_km: number | null;
+  weather_severity: WeatherSeverity | null;
+  wind_speed_kt: number | null;
+  wave_height_m: number | null;
 }
 
 export interface RoutePlan {

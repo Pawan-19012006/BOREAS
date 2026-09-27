@@ -13,6 +13,8 @@ from .models import (
     IcebergForecast,
     IcebergForecastPoint,
     SeaIceForecastResponse,
+    WeatherHotspot,
+    WeatherHotspotResponse,
 )
 from .sea_ice import SeaIceForecastEngine
 from .service import (
@@ -20,6 +22,7 @@ from .service import (
     get_future_state,
     get_iceberg_forecasts,
     get_sea_ice_forecast,
+    get_weather_hotspots,
 )
 
 __all__ = [
@@ -32,8 +35,11 @@ __all__ = [
     "IcebergTrajectoryEngine",
     "SeaIceForecastEngine",
     "SeaIceForecastResponse",
+    "WeatherHotspot",
+    "WeatherHotspotResponse",
     "get_environmental_forecast",
     "get_future_state",
     "get_iceberg_forecasts",
     "get_sea_ice_forecast",
+    "get_weather_hotspots",
 ]

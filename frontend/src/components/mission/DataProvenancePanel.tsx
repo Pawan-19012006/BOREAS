@@ -9,6 +9,11 @@
 
 import type { RoutePlan } from '../../services/missionApi';
 import {
+  WEATHER_STATE_LABEL,
+  type WeatherHotspotResponse,
+  type WeatherState,
+} from '../../hooks/useWeatherHotspots';
+import {
   SATELLITE_STATE_LABEL,
   type SatelliteSourceStatus,
   type SatelliteState,
@@ -16,6 +21,7 @@ import {
 
 interface DataProvenancePanelProps {
   satellite: [string, SatelliteSourceStatus] | null;
+  weather: { data: WeatherHotspotResponse | null; state: WeatherState; error: string | null; refresh: () => void };
   route: RoutePlan | null;
   horizonHours: number;
   onClose: () => void;
@@ -117,6 +123,7 @@ function SatelliteSection({
 
 export const DataProvenancePanel = ({
   satellite,
+  weather,
   route,
   horizonHours,
   onClose,
@@ -190,8 +197,53 @@ export const DataProvenancePanel = ({
         <section className="panel-section">
           <div className="provenance-head">
             <span className="provenance-source">Weather</span>
-            <ModeTag mode="SIMULATED" />
+            <ModeTag mode={weather.state === 'CONNECTED' ? 'REAL' : 'SIMULATED'} />
           </div>
+          <dl style={{ margin: 0 }}>
+            <div className="data-row">
+              <dt>Source</dt>
+              <dd>{weather.data?.source ?? 'Unavailable'}</dd>
+            </div>
+            <div className="data-row">
+              <dt>Status</dt>
+              <dd>{WEATHER_STATE_LABEL[weather.state]}</dd>
+            </div>
+            {weather.data && (
+              <>
+                <div className="data-row">
+                  <dt>Forecast</dt>
+                  <dd>
+                    {weather.data.horizon_hours === 0 ? 'Now' : `T+${weather.data.horizon_hours}h`}
+                  </dd>
+                </div>
+                <div className="data-row">
+                  <dt>Valid</dt>
+                  <dd>{weather.data.valid_time.replace('T', ' ').slice(0, 19)} UTC</dd>
+                </div>
+                <div className="data-row">
+                  <dt>Hotspot regions</dt>
+                  <dd>{weather.data.hotspots.length}</dd>
+                </div>
+              </>
+            )}
+          </dl>
+
+          {/* No real forecast provider is wired up, so this says DEMO MODE
+              plainly rather than leaving the operator to infer it. */}
+          <p
+            className={`notice ${weather.state === 'CONNECTED' ? 'notice-info' : 'notice-warn'}`}
+            style={{ marginTop: 'var(--space-3)' }}
+          >
+            {weather.state === 'CONNECTION_ERROR'
+              ? `Forecast unavailable — ${weather.error ?? 'request failed'}.`
+              : weather.state === 'CONNECTED'
+                ? 'Live weather forecast feed.'
+                : 'DEMO MODE — the weather field is a simulated synoptic forecast. No real weather provider is connected, and these hotspots are not a real-world forecast.'}
+          </p>
+
+          <button type="button" className="btn btn-ghost btn-sm" onClick={weather.refresh}>
+            Re-check forecast
+          </button>
           {route && <p className="provenance">{route.provenance.weather}</p>}
         </section>
 

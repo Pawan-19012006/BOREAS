@@ -30,8 +30,18 @@ const MARKER_HEIGHT_M = 4000;
 export const DEVIATION_COLORS: Record<string, string> = {
   SEA_ICE: '#8fd4e8',
   ICEBERG: '#ffb300',
+  // Matches WeatherHotspotLayer's SEVERE tone, so a bend and the region that
+  // caused it read as the same hazard.
+  WEATHER: '#d9a05b',
   LAND: '#8ea6bd',
 };
+
+// Consecutive bends can sit only a few hundred km apart, which at a whole-ocean
+// zoom puts their labels on top of one another. Alternating the label above and
+// below the marker keeps neighbouring reasons readable without hiding any of
+// them -- the explanation is the point of this layer, so dropping labels to
+// declutter would defeat it.
+const LABEL_OFFSETS_PX = [-14, 18];
 
 interface RouteDeviationLayerProps {
   viewer: Viewer;
@@ -48,7 +58,7 @@ export const RouteDeviationLayer = ({ viewer, visible, deviations }: RouteDeviat
 
       deviations
         .filter((d) => d.cause !== 'NAVIGATION_COST')
-        .forEach((d) => {
+        .forEach((d, index) => {
           const color = Color.fromCssColorString(DEVIATION_COLORS[d.cause] ?? '#8ea6bd');
           const bend = Cartesian3.fromDegrees(d.longitude, d.latitude, MARKER_HEIGHT_M);
           const cause = Cartesian3.fromDegrees(d.cause_longitude, d.cause_latitude, MARKER_HEIGHT_M);
@@ -95,8 +105,9 @@ export const RouteDeviationLayer = ({ viewer, visible, deviations }: RouteDeviat
               backgroundColor: Color.fromCssColorString('#04090f').withAlpha(0.85),
               backgroundPadding: new Cartesian2(7, 4),
               style: LabelStyle.FILL,
-              verticalOrigin: VerticalOrigin.BOTTOM,
-              pixelOffset: new Cartesian2(0, -14),
+              verticalOrigin:
+                index % 2 === 0 ? VerticalOrigin.BOTTOM : VerticalOrigin.TOP,
+              pixelOffset: new Cartesian2(0, LABEL_OFFSETS_PX[index % LABEL_OFFSETS_PX.length]),
             },
           });
         });

@@ -7,12 +7,15 @@
 
 import type { LayerVisibility } from '../../App';
 import { SATELLITE_STATE_LABEL, type SatelliteState } from '../../hooks/useSatelliteStatus';
+import { WEATHER_STATE_LABEL, type WeatherState } from '../../hooks/useWeatherHotspots';
 
 interface MapLayerControlsProps {
   visibility: LayerVisibility;
   onToggle: (key: keyof LayerVisibility) => void;
   /** Probed state, not a guess from whether credentials exist. */
   satelliteState: SatelliteState;
+  /** Whether the weather field behind the hotspots is real or simulated. */
+  weatherState: WeatherState;
   onOpenProvenance: () => void;
 }
 
@@ -20,6 +23,7 @@ const LAYERS: { key: keyof LayerVisibility; label: string }[] = [
   { key: 'routes', label: 'Routes' },
   { key: 'icebergs', label: 'Icebergs' },
   { key: 'seaIce', label: 'Sea ice' },
+  { key: 'weather', label: 'Weather' },
   { key: 'satellite', label: 'Satellite' },
 ];
 
@@ -27,6 +31,7 @@ export const MapLayerControls = ({
   visibility,
   onToggle,
   satelliteState,
+  weatherState,
   onOpenProvenance,
 }: MapLayerControlsProps) => {
   return (
@@ -41,6 +46,11 @@ export const MapLayerControls = ({
         >
           <span className="layer-pill-dot" data-on={visibility[key]} />
           {label}
+          {key === 'weather' && (
+            <span className="layer-pill-tag" data-state={weatherState}>
+              {WEATHER_STATE_LABEL[weatherState]}
+            </span>
+          )}
           {key === 'satellite' && (
             <span className="layer-pill-tag" data-state={satelliteState}>
               {SATELLITE_STATE_LABEL[satelliteState]}

@@ -60,6 +60,21 @@ Without this loader, credentials written into `.env` were invisible to the serve
 
 ---
 
+### Weather severity and cost (code-level configuration)
+
+Weather has no environment variables — no real provider is connected — but its behaviour is centralised rather than scattered:
+
+| Constant | Location | Purpose |
+|---|---|---|
+| `CAUTION_SEVERITY` / `SEVERE_SEVERITY` / `EXTREME_SEVERITY` | `forecast/weather_severity.py` | Category boundaries on the 0–1 severity score. |
+| `WIND_RAMP_KT` / `WAVE_RAMP_M` / `VISIBILITY_RAMP_NM` + weights | `forecast/weather_severity.py` | Per-variable ramps and their contribution to severity. |
+| `MIN_HOTSPOT_CELLS` | `forecast/weather_hotspots.py` | Smallest region promoted to a hotspot (default 3 cells). |
+| `SYSTEM_DRIFT_DEG_LON_PER_HOUR`, `_SEED_SYSTEMS` | `forecast/weather_field.py` | How fast the simulated lows track east, and where they start. |
+| `WEATHER_RISK_BY_CATEGORY` | `mission/config.py` | Navigation-risk cost per category — what the router pays. |
+| `WEATHER_EXTREME_BLOCKS` | `mission/config.py` | `True` makes EXTREME a hard constraint instead of a very expensive corridor. Default `False`. |
+| `WEATHER_DEVIATION_MIN_EXCESS` | `mission/config.py` | How far above the open-water baseline a cell must be before a bend is blamed on weather. |
+| `DEVIATION_MAX_WEATHER_CAUSE_DISTANCE_KM` | `mission/config.py` | How far a weather cause may sit from its bend and still be named (900 km). |
+
 ## 2. Frontend Configuration (`frontend/.env`)
 
 | Variable | Required / Optional | Secret? | Used By | Description |

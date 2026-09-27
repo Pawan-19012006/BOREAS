@@ -16,12 +16,24 @@ from datetime import datetime, timezone
 import numpy as np
 from scipy.ndimage import binary_dilation
 
+from boreas_core.forecast.weather_field import WEATHER_PROVENANCE
+from boreas_core.forecast.weather_hotspots import detect_hotspots_cached
+from boreas_core.forecast.weather_severity import (
+    CAUTION_SEVERITY,
+    DRIVER_LABELS,
+    SEVERE_SEVERITY,
+    primary_weather_driver,
+    severity_category,
+)
 from boreas_core.observe.service import get_observed_vessels
 from boreas_core.routing.astar import astar_route
 
 from .config import (
     DEFAULT_ICE_THRESHOLDS,
     DEVIATION_MAX_CAUSE_DISTANCE_KM,
+    DEVIATION_MAX_WEATHER_CAUSE_DISTANCE_KM,
+    WEATHER_DEVIATION_MIN_EXCESS,
+    WEATHER_RISK_BY_CATEGORY,
     DEVIATION_MIN_PENALTY,
     DOMAIN_LAT_RANGE,
     DOMAIN_LON_RANGE,
@@ -61,6 +73,7 @@ from .models import (
     SeaIceExposure,
     VesselSummary,
     WeatherExposure,
+    WeatherHotspotEncounter,
 )
 
 RISK_WEIGHT_SCALE = 10.0  # A* cost multiplier for a fully-penalised cell
@@ -257,6 +270,19 @@ def _simplify_path(
     return simplified, causes
 
 
+def _nearest_hotspot(lon: float, lat: float, hotspots):
+    """The detected region a cell most plausibly belongs to, or None when the cell
+    is not on the approach to any of them."""
+    best, best_d = None, None
+    for h in hotspots:
+        d = float(haversine_km_array(lon, lat, h.longitude, h.latitude))
+        # Within twice the radius the cell is on this system's flank; further out
+        # it should not be named as the reason.
+        if d <= 2.0 * h.radius_km and (best_d is None or d < best_d):
+            best, best_d = h, d
+    return best
+
+
 def _describe_deviations(
     simplified_cells: list[tuple[int, int]],
     causes: dict[tuple[int, int], tuple[int, int]],
@@ -267,6 +293,7 @@ def _describe_deviations(
     land,
     snapshot: HazardSnapshot,
     thresholds: IceThresholds,
+    hotspots=(),
 ) -> list[RouteDeviation]:
     """Turns blocked shortcuts into operator-facing reasons, using only what is
     actually in the hazard fields at the offending cell. A bend whose cost is
@@ -282,9 +309,18 @@ def _describe_deviations(
         bend_lon, bend_lat = float(lons[cell[1]]), float(lats[cell[0]])
 
         # Only name a hazard the operator can actually see near this bend --
-        # see DEVIATION_MAX_CAUSE_DISTANCE_KM.
+        # see DEVIATION_MAX_CAUSE_DISTANCE_KM. Weather regions are large and are
+        # drawn as shaded areas, so they get their own, wider allowance; anything
+        # else must be local to the bend.
         cause_distance_km = float(haversine_km_array(bend_lon, bend_lat, cause_lon, cause_lat))
-        if cause_distance_km > DEVIATION_MAX_CAUSE_DISTANCE_KM:
+        wx_excess = float(fields.wx_risk[cause_cell]) - WEATHER_RISK_BY_CATEGORY["NORMAL"]
+        is_weather_cause = wx_excess >= WEATHER_DEVIATION_MIN_EXCESS
+        max_cause_km = (
+            DEVIATION_MAX_WEATHER_CAUSE_DISTANCE_KM
+            if is_weather_cause
+            else DEVIATION_MAX_CAUSE_DISTANCE_KM
+        )
+        if cause_distance_km > max_cause_km:
             out.append(
                 RouteDeviation(
                     longitude=bend_lon,
@@ -300,6 +336,9 @@ def _describe_deviations(
         sic = float(fields.sic[cause_cell])
         berg_risk = float(fields.berg_risk[cause_cell])
         ice_risk = float(fields.ice_risk[cause_cell])
+        wx_risk = float(fields.wx_risk[cause_cell])
+        wx_severity = float(fields.wx_severity[cause_cell])
+        wx_category = severity_category(wx_severity)
 
         if bool(land[cause_cell]):
             out.append(
@@ -325,7 +364,44 @@ def _describe_deviations(
             nearest_km = float(haversine_km_array(cause_lon, cause_lat, nearest.lon, nearest.lat))
             nearest_id = nearest.id
 
-        if berg_risk >= ice_risk and berg_risk >= DEVIATION_MIN_PENALTY and nearest_id is not None:
+        # Weather is named when it is materially more expensive here than ordinary
+        # open water AND it is the dominant hazard at the cell. A router avoiding a
+        # storm turns on the system's outer flank, so insisting the rejected cell
+        # itself be CAUTION would hide the true cause -- see
+        # WEATHER_DEVIATION_MIN_EXCESS. The wording below is careful about this:
+        # only a cell that really is CAUTION+ is described as severe weather; an
+        # outer-flank cell is described as the approach to the named region, which
+        # is what it is.
+        if is_weather_cause and wx_risk >= berg_risk and wx_risk >= ice_risk:
+            wind = float(fields.wind_kt[cause_cell])
+            wave = float(fields.wave_m[cause_cell])
+            vis = float(fields.visibility_nm[cause_cell])
+            driver = DRIVER_LABELS[primary_weather_driver(wind, wave, vis)].lower()
+            conditions = f"{wind:.0f} kt / {wave:.1f} m"
+
+            if wx_category != "NORMAL":
+                detail = f"{wx_category.capitalize()} weather — {driver}, {conditions}"
+            else:
+                region = _nearest_hotspot(cause_lon, cause_lat, hotspots)
+                detail = (
+                    f"Approach to {region.hotspot_id} ({region.severity}) — {conditions}"
+                    if region is not None
+                    else f"Rising wind and sea — {conditions}"
+                )
+            out.append(
+                RouteDeviation(
+                    longitude=float(lons[cell[1]]),
+                    latitude=float(lats[cell[0]]),
+                    cause_longitude=cause_lon,
+                    cause_latitude=cause_lat,
+                    cause="WEATHER",
+                    detail=detail,
+                    weather_severity=wx_category,
+                    wind_speed_kt=round(wind, 1),
+                    wave_height_m=round(wave, 1),
+                )
+            )
+        elif berg_risk >= ice_risk and berg_risk >= DEVIATION_MIN_PENALTY and nearest_id is not None:
             out.append(
                 RouteDeviation(
                     longitude=float(lons[cell[1]]),
@@ -361,6 +437,52 @@ def _describe_deviations(
                     detail="Higher-cost water than the direct line",
                 )
             )
+    return out
+
+
+def _hotspot_encounters(
+    mid_lon: np.ndarray,
+    mid_lat: np.ndarray,
+    cum_time: np.ndarray,
+    horizon_hours: int,
+) -> list[WeatherHotspotEncounter]:
+    """Which weather hotspot regions this route actually has to reckon with.
+
+    Uses the SAME detected regions the map draws and the `/forecast/weather/
+    hotspots` endpoint returns, so "hotspots crossed" on a route card and the
+    shaded areas on the globe are one and the same set. `crossed` means the
+    track passes inside the region's equal-area radius; everything else is
+    reported with its closest approach so an operator can see a near miss.
+    """
+    lons_g, lats_g = domain_axes()
+    hotspots = detect_hotspots_cached(lons_g, lats_g, horizon_hours)
+    out: list[WeatherHotspotEncounter] = []
+    for h in hotspots:
+        d = haversine_km_array(mid_lon, mid_lat, h.longitude, h.latitude)
+        k = int(np.argmin(d))
+        closest = float(d[k])
+        # Only report regions that are actually relevant to this track. Beyond
+        # twice the radius the region is not a route consideration, and listing
+        # it would just pad the card.
+        if closest > 2.0 * h.radius_km:
+            continue
+        out.append(
+            WeatherHotspotEncounter(
+                hotspot_id=h.hotspot_id,
+                severity=h.severity,
+                primary_driver=h.primary_driver,
+                longitude=h.longitude,
+                latitude=h.latitude,
+                radius_km=h.radius_km,
+                distance_km=round(closest, 1),
+                crossed=bool(closest <= h.radius_km),
+                closest_approach_eta_h=round(float(cum_time[k]), 1),
+                wind_speed_kt=h.wind_speed_kt,
+                wave_height_m=h.wave_height_m,
+                valid_time=h.valid_time,
+            )
+        )
+    out.sort(key=lambda e: e.distance_km)
     return out
 
 
@@ -458,17 +580,40 @@ def _evaluate_route(coords, fm: FieldModel, ice_class: str, thresholds: IceThres
 
     # -- weather
     env = snapshot.env
+    # The worst weather anywhere on the track sets the category an operator
+    # plans for; the mean sets the exposure level, so a route that clips one
+    # squall is not labelled the same as one that sits in a storm for days.
+    max_severity = severity_category(float(f.wx_severity.max()))
+    mean_severity = float(np.sum(share * f.wx_severity))
+    exposure_level = (
+        "HIGH"
+        if mean_severity >= SEVERE_SEVERITY
+        else "MODERATE"
+        if mean_severity >= CAUTION_SEVERITY
+        else "LOW"
+    )
+
+    encounters = _hotspot_encounters(mid_lon, mid_lat, cum_time, snapshot.horizon_hours)
+    severe_km = [e.distance_km for e in encounters if e.severity in ("SEVERE", "EXTREME")]
+
     weather = WeatherExposure(
         mean_wave_m=round(wmean(f.wave_m), 2),
         max_wave_m=round(float(f.wave_m.max()), 2),
         mean_wind_kt=round(wmean(f.wind_kt), 1),
         max_wind_kt=round(float(f.wind_kt.max()), 1),
-        min_visibility_nm=env.visibility_nm,
+        min_visibility_nm=round(float(f.visibility_nm.min()), 1),
         air_temp_c=env.air_temp_c,
-        pressure_hpa=env.pressure_hpa,
+        pressure_hpa=round(float(f.pressure_hpa.min()), 1),
         high_sea_state_pct=round(float(share[f.wave_m >= HIGH_SEA_STATE_M].sum() * 100), 1),
         mean_risk=round(wmean(f.wx_risk), 3),
-        provenance=env.provenance + " (uniform state scaled by latitude band)",
+        exposure_level=exposure_level,
+        max_severity=max_severity,
+        hotspots_crossed=sum(1 for e in encounters if e.crossed),
+        closest_severe_hotspot_km=round(min(severe_km), 1) if severe_km else None,
+        hotspot_encounters=encounters,
+        source="SIMULATED",
+        mode="DEMO",
+        provenance=WEATHER_PROVENANCE,
     )
 
     # -- risk score, driver, confidence
@@ -568,6 +713,10 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
     land = land_mask(lons, lats)
     fm = FieldModel(snapshot, profile, thresholds)
     grid_fields = fm.evaluate(lon_grid, lat_grid)
+    # Detected once per plan and shared with every route's metrics and deviation
+    # attribution, so the map, the route cards and the bend explanations all refer
+    # to the same regions.
+    hotspots = detect_hotspots_cached(lons, lats, snapshot.horizon_hours)
 
     def cell_of(lon, lat):
         return int(np.argmin(np.abs(lats - lat))), int(np.argmin(np.abs(lons - lon)))
@@ -617,6 +766,7 @@ def plan_mission(request: MissionPlanRequest, snapshot: HazardSnapshot | None = 
                     land=land,
                     snapshot=snapshot,
                     thresholds=thresholds,
+                    hotspots=hotspots,
                 ),
                 "m": _evaluate_route(coords, fm, vessel.ice_class, thresholds, snapshot),
             }
