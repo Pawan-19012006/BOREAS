@@ -43,6 +43,7 @@ export const MissionHud = ({ vesselName, missionInfo, activeRoute, vesselState }
         </div>
         <span className="sim-badge" title="Position advanced from the active route's own distance/ETA, not live AIS">
           Vessel telemetry &mdash; simulated
+          {vesselState.speed_multiplier !== 1 ? ` · ${vesselState.speed_multiplier}×` : ''}
         </span>
       </div>
 
@@ -54,8 +55,21 @@ export const MissionHud = ({ vesselName, missionInfo, activeRoute, vesselState }
         />
         <Cell
           label="Course / speed"
-          value={vesselState.heading_deg !== null ? `${vesselState.heading_deg.toFixed(0)}°` : 'Arrived'}
-          sub={`${vesselState.speed_kt.toFixed(1)} kt${vesselState.heading_deg !== null ? ` · ${compassPoint(vesselState.heading_deg)}` : ''}`}
+          value={
+            !vesselState.is_under_way
+              ? 'Holding'
+              : vesselState.heading_deg !== null
+                ? `${vesselState.heading_deg.toFixed(0)}°`
+                : 'Arrived'
+          }
+          sub={
+            // While a route decision is outstanding the vessel is frozen at the
+            // position the reroute was planned from; reporting cruise speed here
+            // would contradict the position next to it.
+            !vesselState.is_under_way
+              ? 'Position locked for route decision'
+              : `${vesselState.speed_kt.toFixed(1)} kt${vesselState.heading_deg !== null ? ` · ${compassPoint(vesselState.heading_deg)}` : ''}`
+          }
         />
         <Cell
           label="Next waypoint"

@@ -30,6 +30,19 @@ export interface ActiveRoute {
   horizon_hours: number;
   activated_at: string;
   supersedes_update_id: string | null;
+  /** Distance already sailed on PREVIOUS active routes of this mission, so
+   *  mission progress stays continuous across a replan. */
+  distance_travelled_before_km: number;
+  /** Shared demo time-acceleration. Lives on the backend so Shore and Ship
+   *  cannot run at different speeds. */
+  speed_multiplier: number;
+  /** Null while the vessel is frozen (e.g. awaiting a route decision). */
+  running_since: string | null;
+  paused_reason: string | null;
+  /** How far this route's first coordinate sat from the vessel's actual
+   *  position at activation. ~0 for a replan from current position; a large
+   *  value means Shore and Ship desynchronised. Null on initial activation. */
+  start_offset_km: number | null;
 }
 
 export interface VesselState {
@@ -46,6 +59,10 @@ export interface VesselState {
   next_waypoint_index: number;
   progress_fraction: number;
   is_complete: boolean;
+  /** False while simulated movement is frozen for a route decision. */
+  is_under_way: boolean;
+  paused_reason: string | null;
+  speed_multiplier: number;
   activated_at: string;
   updated_at: string;
   provenance: string;
@@ -54,11 +71,21 @@ export interface VesselState {
 /** What POST /coordination/simulate-environment-change returns, and exactly
  *  what POST /coordination/route-updates expects as its body -- Shore passes
  *  the preview straight through unchanged when the operator sends it. */
+/** The frozen position a reroute was planned from. Captured once when the
+ *  environment change fired; the vessel is held there until the Captain
+ *  decides, so the proposal cannot go stale underneath the decision. */
+export interface OriginSnapshot {
+  longitude: number;
+  latitude: number;
+  captured_at: string;
+}
+
 export interface RouteUpdateCreate {
   mission_id: MissionId;
   vessel_id: string;
   reason: string;
   current_position: [number, number];
+  origin_snapshot: OriginSnapshot | null;
   old_route: RoutePlan;
   new_route: RoutePlan;
 }
@@ -121,6 +148,25 @@ export function activateRoute(mission_id: MissionId, vessel_id: string, route: R
 
 export function getActiveRoute(vesselId: string) {
   return request<ActiveRoute>(`/coordination/active-route/${vesselId}`);
+}
+
+/** Changes the SHARED demo time-acceleration. Both apps read the same clock,
+ *  so this changes the pace for Shore and Ship together. */
+export function setVesselSpeed(vesselId: string, multiplier: number) {
+  return request<VesselState>(
+    `/coordination/vessel-state/${vesselId}/speed`,
+    json({ multiplier }),
+  );
+}
+
+/** Operator hold. Also the manual escape hatch for a proposal that was
+ *  abandoned rather than decided; accept/decline resume the vessel on their own. */
+export function pauseVessel(vesselId: string) {
+  return request<VesselState>(`/coordination/vessel-state/${vesselId}/pause`, json({}));
+}
+
+export function resumeVessel(vesselId: string) {
+  return request<VesselState>(`/coordination/vessel-state/${vesselId}/resume`, json({}));
 }
 
 export function getVesselState(vesselId: string) {

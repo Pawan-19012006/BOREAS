@@ -1,12 +1,14 @@
-// Shore's half of the shore<->ship coordination workflow: start monitoring a
-// vessel against its ActiveRoute, simulate an environment-change event,
-// review the real replanned route, send it to the Ship application, then
-// watch for the Captain's decision.
+// Shore's half of the shore<->ship coordination workflow.
 //
-// This is additive to the existing Shore mission experience -- it does not
-// touch the existing setup/planning/navigating phase machine
-// (useMissionPlanner) or its client-only voyage simulation. It is a
-// separate capability available once a plan exists.
+// Monitoring is NOT a separate operational step the operator opts into. Starting
+// navigation commits the selected route and this begins with it: activating the
+// canonical ActiveRoute, starting telemetry and starting to poll are one action,
+// because to an operator "the vessel is under way" and "I am watching it" are
+// the same fact. `beginNavigation` is that single commit.
+//
+// Everything displayed here is the backend's canonical state. Shore does not
+// advance a vessel of its own -- Shore and Ship read the same simulated clock,
+// so they cannot disagree about where the vessel is or how fast time is passing.
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -15,6 +17,9 @@ import {
   getActiveRoute,
   getVesselState,
   listRouteUpdates,
+  pauseVessel,
+  resumeVessel,
+  setVesselSpeed,
   sendRouteUpdate,
   simulateEnvironmentChange,
   type ActiveRoute,
@@ -44,12 +49,19 @@ export interface UseFleetMonitoringReturn {
   resolvedUpdate: RouteUpdate | null;
   error: string | null;
   isBusy: boolean;
-  startMonitoring: (missionId: MissionId, vesselId: string, route: RoutePlan) => Promise<void>;
+  /** The single commit action: activate the route, start telemetry, start
+   *  watching. Called by START NAVIGATION, never by a separate button. */
+  beginNavigation: (missionId: MissionId, vesselId: string, route: RoutePlan) => Promise<void>;
   simulateChange: () => Promise<void>;
   discardPreview: () => void;
   sendUpdate: () => Promise<void>;
   acknowledgeResolution: () => void;
-  stopMonitoring: () => void;
+  endNavigation: () => void;
+  setSpeed: (multiplier: number) => Promise<void>;
+  /** Operator hold/proceed. Distinct from the automatic freeze during a
+   *  replan, which the backend applies and lifts on its own. */
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
 }
 
 export function useFleetMonitoring(): UseFleetMonitoringReturn {
@@ -63,17 +75,19 @@ export function useFleetMonitoring(): UseFleetMonitoringReturn {
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
-  const startMonitoring = useCallback(
+  const beginNavigation = useCallback(
     async (missionId: MissionId, vesselIdToUse: string, route: RoutePlan) => {
       setIsBusy(true);
       setError(null);
       try {
+        // One atomic commit: the selected route becomes canonical, the vessel's
+        // clock starts, and polling begins. There is no second button.
         const active = await activateRoute(missionId, vesselIdToUse, route);
         setVesselId(vesselIdToUse);
         setActiveRouteState(active);
         setStage('monitoring');
       } catch (err) {
-        setError(err instanceof CoordinationError ? err.message : 'Could not start monitoring.');
+        setError(err instanceof CoordinationError ? err.message : 'Could not start navigation.');
       } finally {
         setIsBusy(false);
       }
@@ -81,7 +95,40 @@ export function useFleetMonitoring(): UseFleetMonitoringReturn {
     [],
   );
 
-  const stopMonitoring = useCallback(() => {
+  const setSpeed = useCallback(
+    async (multiplier: number) => {
+      if (!vesselId) return;
+      try {
+        // The multiplier lives on the backend, so this one call changes the pace
+        // for Shore and Ship alike.
+        const state = await setVesselSpeed(vesselId, multiplier);
+        setVesselState(state);
+      } catch (err) {
+        setError(err instanceof CoordinationError ? err.message : 'Could not change simulation speed.');
+      }
+    },
+    [vesselId],
+  );
+
+  const pause = useCallback(async () => {
+    if (!vesselId) return;
+    try {
+      setVesselState(await pauseVessel(vesselId));
+    } catch (err) {
+      setError(err instanceof CoordinationError ? err.message : 'Could not hold the vessel.');
+    }
+  }, [vesselId]);
+
+  const resume = useCallback(async () => {
+    if (!vesselId) return;
+    try {
+      setVesselState(await resumeVessel(vesselId));
+    } catch (err) {
+      setError(err instanceof CoordinationError ? err.message : 'Could not resume the vessel.');
+    }
+  }, [vesselId]);
+
+  const endNavigation = useCallback(() => {
     setStage('idle');
     setVesselId(null);
     setActiveRouteState(null);
@@ -99,8 +146,19 @@ export function useFleetMonitoring(): UseFleetMonitoringReturn {
 
     const poll = async () => {
       try {
-        const state = await getVesselState(vesselId);
-        if (!cancelled) setVesselState(state);
+        // Both come from the backend on every tick: the coordination store is
+        // the single source of truth for WHICH route is active, not just where
+        // the vessel is. Polling the active route too means Shore picks up an
+        // acceptance even if it happened outside this hook's pending-update
+        // watch (a reload, a second operator, a Captain acting late), instead
+        // of rendering a stale frontend-held route.
+        const [state, active] = await Promise.all([
+          getVesselState(vesselId),
+          getActiveRoute(vesselId),
+        ]);
+        if (cancelled) return;
+        setVesselState(state);
+        setActiveRouteState(active);
       } catch {
         // transient poll failure -- keep the last known state on screen
       }
@@ -198,11 +256,14 @@ export function useFleetMonitoring(): UseFleetMonitoringReturn {
     resolvedUpdate,
     error,
     isBusy,
-    startMonitoring,
+    beginNavigation,
     simulateChange,
     discardPreview,
     sendUpdate,
     acknowledgeResolution,
-    stopMonitoring,
+    endNavigation,
+    setSpeed,
+    pause,
+    resume,
   };
 }

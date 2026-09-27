@@ -46,6 +46,64 @@ class ActiveRoute(BaseModel):
     supersedes_update_id: str | None = Field(
         None, description="The RouteUpdate whose acceptance produced this activation, if any"
     )
+    speed_multiplier: float = Field(
+        1.0,
+        gt=0.0,
+        description=(
+            "Demonstration time acceleration. 1x is the slow, realistic pace; higher values "
+            "compress a multi-day passage into a demo. Held here, on the shared backend state, "
+            "so Shore and Ship cannot run at different speeds."
+        ),
+    )
+    elapsed_sim_hours: float = Field(
+        0.0,
+        ge=0.0,
+        description="Simulated voyage hours banked before the current running interval.",
+    )
+    running_since: str | None = Field(
+        None,
+        description=(
+            "ISO 8601 UTC when the clock last started running, or None while the vessel is "
+            "frozen. Freezing during a replan is what makes the proposed route's start position "
+            "deterministic."
+        ),
+    )
+    paused_reason: str | None = Field(
+        None, description="Why the vessel is frozen, e.g. AWAITING_ROUTE_DECISION"
+    )
+    distance_travelled_before_km: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Distance already sailed on PREVIOUS active routes of this mission. A replan starts "
+            "a new route at the vessel's current position, so progress along that route restarts "
+            "at zero -- this carries the voyage's history forward so mission progress does not "
+            "reset to 0% on acceptance."
+        ),
+    )
+    start_offset_km: float | None = Field(
+        None,
+        description=(
+            "How far the new route's first coordinate sat from the vessel's actual position at "
+            "activation. Near-zero for a replan from current position; None when not applicable "
+            "(the initial activation from port). Surfaced so a desynchronisation is visible "
+            "rather than silently rendered."
+        ),
+    )
+
+
+class OriginSnapshot(BaseModel):
+    """The exact vessel position a reroute wascalculated from, captured once
+    when the environment change was triggered and never recomputed afterwards.
+
+    Freezing this is what makes the workflow deterministic: the proposed route,
+    the Captain's review and the eventual activation all refer to one position,
+    so the route cannot go stale underneath a Captain who takes a moment to
+    decide."""
+
+    longitude: float
+    latitude: float
+    captured_at: str = Field(..., description="ISO 8601 UTC")
 
 
 class VesselState(BaseModel):
@@ -68,6 +126,11 @@ class VesselState(BaseModel):
     next_waypoint_index: int = Field(..., description="Index into route.coordinates of the waypoint being steered toward")
     progress_fraction: float = Field(..., ge=0.0, le=1.0)
     is_complete: bool
+    is_under_way: bool = Field(
+        True, description="False while simulated movement is frozen (e.g. awaiting a route decision)"
+    )
+    paused_reason: str | None = Field(None, description="Why movement is frozen, if it is")
+    speed_multiplier: float = Field(1.0, description="Shared demo acceleration currently in force")
     activated_at: str
     updated_at: str
     provenance: str = "SIMULATED — advanced from the active route's real distance/ETA; not live AIS telemetry"
@@ -78,6 +141,13 @@ class RouteUpdateCreate(BaseModel):
     vessel_id: str
     reason: str
     current_position: list[float] = Field(..., description="[lon, lat] of the vessel when this update was proposed")
+    origin_snapshot: OriginSnapshot | None = Field(
+        None,
+        description=(
+            "The frozen position this reroute was planned from. `new_route.coordinates[0]` equals "
+            "it, and activation resumes from it, so nothing drifts while the Captain decides."
+        ),
+    )
     old_route: RoutePlan
     new_route: RoutePlan
 
@@ -91,6 +161,13 @@ class RouteUpdate(BaseModel):
     reason: str
     created_at: str
     current_position: list[float] = Field(..., description="[lon, lat] of the vessel when this update was proposed")
+    origin_snapshot: OriginSnapshot | None = Field(
+        None,
+        description=(
+            "The frozen position this reroute was planned from. `new_route.coordinates[0]` equals "
+            "it, and activation resumes from it, so nothing drifts while the Captain decides."
+        ),
+    )
     old_route: RoutePlan
     new_route: RoutePlan
     distance_delta: float = Field(..., description="new_route.distance_km - old_route.distance_km")
@@ -113,6 +190,12 @@ class ActivateRouteRequest(BaseModel):
     mission_id: str
     vessel_id: str
     route: RoutePlan
+
+
+class SetSpeedRequest(BaseModel):
+    """Shared demo time-acceleration. Validated against SPEED_MULTIPLIERS."""
+
+    multiplier: float = Field(..., gt=0.0)
 
 
 class SimulateChangeRequest(BaseModel):

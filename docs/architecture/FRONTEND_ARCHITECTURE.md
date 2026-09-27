@@ -175,6 +175,13 @@ explorer-only layers that remain unmounted still use the naive pattern.
   applies, not an operator preference — and every displayed value comes from the `/mission/plan`
   response. "Why the track bends" lists the route's `deviations`, filtering out `NAVIGATION_COST`
   so no bend is given a hazard explanation it does not have.
+- `simulation/canonicalVoyage.ts`: adapts the backend's canonical `VesselState` into the
+  `VoyageState` shape `NavigationPanel` already consumed. Shore no longer runs a client-side voyage
+  simulation — there is one simulated clock and it lives in `boreas-core`, so the navigation view,
+  the fleet-monitoring panel and the Ship app cannot disagree about position, progress or speed.
+  `simulation/voyageSimulation.ts` now holds only the shared types and the speed steps (1/2/4/8/12x,
+  kept in step with `coordination.service.SPEED_MULTIPLIERS`); the speed control posts to the
+  backend, so changing it changes the pace for both apps.
 - `layers/WeatherHotspotLayer.tsx` + `hooks/useWeatherHotspots.ts` +
   `components/mission/WeatherHotspotInspector.tsx`: forecast severe-weather regions from
   `GET /forecast/weather/hotspots`, drawn as translucent weather cells (low-alpha fill, defined
@@ -194,12 +201,20 @@ explorer-only layers that remain unmounted still use the naive pattern.
   distance to the selected route (the backend's own figure when the berg is one of the route's
   `relevant_icebergs`, otherwise a plain `haversineKm` fallback to the nearest route vertex).
 - `hooks/useFleetMonitoring.ts` + `components/mission/FleetMonitoringPanel.tsx`: Shore's half of
-  the shore↔ship coordination workflow (see below) — activate a route, poll its simulated vessel
-  position, simulate an environment change, review the real replanned route, send it, watch for
-  the Captain's decision. **Additive**: does not touch the setup/planning/navigating phase machine
-  or `simulation/voyageSimulation.ts`; it is a separate capability available once a plan exists.
-  Its own vessel marker reuses `VesselNavLayer` with a distinct `dataSourceName` prop so it never
-  shares a Cesium data source with the existing client-simulated navigating-phase vessel.
+  the shore↔ship coordination workflow — poll the canonical vessel position, simulate an
+  environment change, review the real replanned route, send it, watch for the Captain's decision.
+  Monitoring is **not** a separate step the operator opts into: `beginNavigation` is the single
+  commit behind START NAVIGATION, activating the canonical route, starting telemetry and starting
+  to poll in one action, so there is no "Start monitoring" button. The panel is an informational
+  state — `Navigation active` with `Monitoring live`, or `Telemetry paused for replanning` while a
+  route decision is outstanding and the vessel is frozen.
+- `simulation/canonicalVoyage.ts`: adapts the backend's canonical `VesselState` into the
+  `VoyageState` shape `NavigationPanel` already consumed. Shore no longer runs a client-side voyage
+  simulation — there is one simulated clock and it lives in `boreas-core`, so the navigation view,
+  the fleet-monitoring panel and the Ship app cannot disagree about position, progress or speed.
+  `simulation/voyageSimulation.ts` now holds only the shared types and the speed steps
+  (1/2/4/8/12×, kept in step with `coordination.service.SPEED_MULTIPLIERS`); the speed control
+  posts to the backend, so changing it changes the pace for both apps.
 
 ### Shore↔Ship coordination (`services/coordinationApi.ts`)
 

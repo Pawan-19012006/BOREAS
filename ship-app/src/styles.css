@@ -563,3 +563,13 @@ select {
     padding: var(--space-3);
   }
 }
+
+
+/* Position-locked line in the route-update alert: quiet, factual, and clearly
+   subordinate to the route comparison above it. */
+.route-update-origin {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted, #93a7b8);
+}

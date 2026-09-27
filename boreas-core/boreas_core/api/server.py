@@ -65,6 +65,7 @@ from boreas_core.coordination import (
     RouteUpdateCreate,
     RouteUpdateRespond,
     RouteUpdateStatus,
+    SetSpeedRequest,
     SimulateChangeRequest,
     VesselState,
 )
@@ -688,6 +689,17 @@ def coordination_simulate_environment_change(request: SimulateChangeRequest) -> 
     if vstate is None or vstate.is_complete:
         raise HTTPException(status_code=422, detail="Vessel has completed its route; nothing to replan.")
 
+    # FREEZE FIRST, then plan. The vessel stops at this exact position and stays
+    # there until the Captain decides, so the proposed route cannot go stale
+    # underneath the decision -- the route is planned from, reviewed against and
+    # eventually activated at one single position.
+    coordination.pause_vessel(request.vessel_id)
+    snapshot = coordination.OriginSnapshot(
+        longitude=vstate.longitude,
+        latitude=vstate.latitude,
+        captured_at=vstate.updated_at,
+    )
+
     new_horizon = min(active.horizon_hours + 24, 120)
     weights = active.route.search_weights
     if new_horizon == active.horizon_hours:
@@ -702,14 +714,20 @@ def coordination_simulate_environment_change(request: SimulateChangeRequest) -> 
                 vessel_id=active.vessel_id,
                 horizon_hours=new_horizon,
                 weights=weights,
-                start_lon=vstate.longitude,
-                start_lat=vstate.latitude,
+                start_lon=snapshot.longitude,
+                start_lat=snapshot.latitude,
             )
         )
     except VesselNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Unknown vessel_id: {exc.args[0]}") from exc
     except (NoRouteFound, ValueError) as exc:
+        # Planning failed, so there will be no decision to wait for -- let the
+        # vessel carry on rather than stranding it frozen.
+        coordination.resume_vessel(request.vessel_id)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VesselNotFound:
+        coordination.resume_vessel(request.vessel_id)
+        raise
 
     new_route = next((r for r in plan.routes if r.route_id == "recommended"), plan.routes[0])
     reason = coordination.describe_route_change(active.route, new_route, active.horizon_hours, new_horizon)
@@ -718,10 +736,61 @@ def coordination_simulate_environment_change(request: SimulateChangeRequest) -> 
         mission_id=active.mission_id,
         vessel_id=active.vessel_id,
         reason=reason,
-        current_position=[vstate.longitude, vstate.latitude],
+        current_position=[snapshot.longitude, snapshot.latitude],
+        origin_snapshot=snapshot,
         old_route=active.route,
         new_route=new_route,
     )
+
+
+@app.post("/coordination/vessel-state/{vessel_id}/speed", response_model=VesselState)
+def coordination_set_speed(vessel_id: str, request: SetSpeedRequest) -> VesselState:
+    """Sets the shared demo time-acceleration for this vessel.
+
+    It lives on the backend precisely so Shore and Ship cannot run at different
+    speeds: both read the same simulated clock. 1x is the slow, realistic pace;
+    12x is for demonstrating a multi-day passage quickly. Changing it never
+    rewrites distance already sailed, and never restarts a frozen vessel.
+    """
+    if request.multiplier not in coordination.SPEED_MULTIPLIERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"multiplier must be one of {list(coordination.SPEED_MULTIPLIERS)}",
+        )
+    if coordination.set_speed_multiplier(vessel_id, request.multiplier) is None:
+        raise HTTPException(status_code=404, detail=f"No active route for vessel {vessel_id}")
+    state = coordination.compute_vessel_state(vessel_id)
+    assert state is not None
+    return state
+
+
+@app.post("/coordination/vessel-state/{vessel_id}/pause", response_model=VesselState)
+def coordination_pause(vessel_id: str) -> VesselState:
+    """Operator hold: freezes simulated movement where it is.
+
+    Distinct from the automatic freeze during a replan, which the environment-
+    change endpoint applies and the Captain's decision lifts.
+    """
+    if coordination.pause_vessel(vessel_id, reason="OPERATOR_HOLD") is None:
+        raise HTTPException(status_code=404, detail=f"No active route for vessel {vessel_id}")
+    state = coordination.compute_vessel_state(vessel_id)
+    assert state is not None
+    return state
+
+
+@app.post("/coordination/vessel-state/{vessel_id}/resume", response_model=VesselState)
+def coordination_resume(vessel_id: str) -> VesselState:
+    """Restarts simulated movement from exactly where it was frozen.
+
+    Normally the accept/decline path resumes the vessel automatically; this is
+    the manual escape hatch for a proposal that was abandoned rather than
+    decided.
+    """
+    if coordination.resume_vessel(vessel_id) is None:
+        raise HTTPException(status_code=404, detail=f"No active route for vessel {vessel_id}")
+    state = coordination.compute_vessel_state(vessel_id)
+    assert state is not None
+    return state
 
 
 @app.post("/coordination/route-updates", response_model=RouteUpdate, status_code=201)

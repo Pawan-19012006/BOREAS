@@ -39,7 +39,7 @@ import { useWeatherHotspots } from './hooks/useWeatherHotspots';
 import { useSatelliteStatus } from './hooks/useSatelliteStatus';
 import { useFleetMonitoring } from './hooks/useFleetMonitoring';
 import { useBackendStatus } from './services/backendStatus';
-import { useVoyageSimulation } from './simulation/voyageSimulation';
+import { voyageFromVesselState } from './simulation/canonicalVoyage';
 import { getMission } from './services/missionApi';
 import type { LonLat } from './lib/geo';
 
@@ -56,6 +56,13 @@ export interface LayerVisibility {
   weather: boolean;
   satellite: boolean;
 }
+
+/** How far an accepted route's first coordinate may sit from the vessel's
+ *  actual position before it is treated as a synchronisation fault. A replan
+ *  starts at the reported position, so the honest expectation is ~0; this
+ *  allows for coordinate rounding and the vessel advancing during the round
+ *  trip, and nothing more. */
+const ACTIVE_ROUTE_START_TOLERANCE_KM = 25;
 
 const DEFAULT_LAYER_VISIBILITY: LayerVisibility = {
   routes: true,
@@ -135,10 +142,19 @@ function App() {
 
   const routeCoordinates = selectedRoute?.coordinates ?? null;
 
-  const [voyage, voyageControls] = useVoyageSimulation(
-    phase === 'navigating' ? (routeCoordinates as LonLat[] | null) : null,
-    selectedRoute?.eta_hours ?? 0,
-    phase === 'navigating',
+  const monitoringVesselState = monitoring.vesselState;
+  const monitoringRouteCoords = monitoring.activeRoute?.route.coordinates ?? null;
+
+  // ONE simulated clock, and it is the backend's. Shore no longer advances a
+  // vessel of its own: the navigation view, the fleet-monitoring panel and the
+  // Ship app all read the same canonical VesselState, so they cannot disagree
+  // about position, progress or how fast time is passing.
+  const voyage = useMemo(
+    () =>
+      monitoring.vesselState && monitoring.activeRoute
+        ? voyageFromVesselState(monitoring.vesselState, monitoring.activeRoute.route)
+        : null,
+    [monitoring.vesselState, monitoring.activeRoute],
   );
 
   useMissionCamera({
@@ -159,30 +175,82 @@ function App() {
 
   // Route vertices already astern, for the covered-track trail.
   const coveredPath = useMemo<LonLat[]>(() => {
-    if (!voyage || !routeCoordinates) return [];
-    const passed = routeCoordinates.slice(0, voyage.legIndex + 1) as LonLat[];
+    if (!voyage || !monitoringRouteCoords) return [];
+    const passed = monitoringRouteCoords.slice(0, voyage.legIndex + 1) as LonLat[];
     return [...passed, voyage.position];
-  }, [voyage, routeCoordinates]);
+  }, [voyage, monitoringRouteCoords]);
 
   // Same idea for the fleet-monitoring vessel, whose position is the
   // backend's own VesselState rather than the client-side voyage simulation.
+  // Depends on the specific values it reads, NOT on the `monitoring` object:
+  // the hook returns a fresh object literal every render, so depending on it
+  // rebuilt this array -- and with it VesselNavLayer's whole Cesium
+  // DataSource -- on every single render rather than only when the vessel
+  // actually moved.
   const monitoringCoveredPath = useMemo<LonLat[]>(() => {
-    const { activeRoute, vesselState } = monitoring;
-    if (!activeRoute || !vesselState) return [];
-    const passed = activeRoute.route.coordinates.slice(0, vesselState.next_waypoint_index) as LonLat[];
-    return [...passed, [vesselState.longitude, vesselState.latitude] as LonLat];
-  }, [monitoring]);
+    if (!monitoringRouteCoords || !monitoringVesselState) return [];
+    const passed = monitoringRouteCoords.slice(
+      0,
+      monitoringVesselState.next_waypoint_index,
+    ) as LonLat[];
+    return [
+      ...passed,
+      [monitoringVesselState.longitude, monitoringVesselState.latitude] as LonLat,
+    ];
+  }, [monitoringRouteCoords, monitoringVesselState]);
 
   const handleEndNavigation = useCallback(() => {
-    voyageControls.reset();
+    monitoring.endNavigation();
     setFollowVessel(true);
     backToPlanning();
-  }, [voyageControls, backToPlanning]);
+  }, [monitoring, backToPlanning]);
 
-  const handleStartNavigation = useCallback(() => {
+  // The one commit action. Activating the canonical route, starting telemetry
+  // and starting to watch are a single operator decision -- there is no second
+  // "start monitoring" step, because to an operator those are the same fact.
+  const handleStartNavigation = useCallback(async () => {
+    if (!plan || !selectedRoute) return;
     setFollowVessel(true);
+    await monitoring.beginNavigation(plan.mission_id, plan.vessel.id, selectedRoute);
     startNavigation();
-  }, [startNavigation]);
+  }, [plan, selectedRoute, monitoring, startNavigation]);
+
+  // --- Single active route -------------------------------------------------
+  //
+  // Once the coordination backend holds an ActiveRoute for this vessel, THAT is
+  // the route the vessel is following, and the Shore map must show it and only
+  // it. Rendering `plan.routes` as well would leave the superseded planned
+  // track on the globe as a second, equally bright "active" route -- which is
+  // precisely the post-acceptance confusion this derives its way out of.
+  //
+  // The comparison view (all three strategies) belongs to planning, before a
+  // route is committed. After commitment there is one answer, and it comes from
+  // the backend, not from frontend state that can go stale.
+  const canonicalRoute = monitoring.activeRoute?.route ?? null;
+  const displayedRoutes = useMemo(
+    () => (canonicalRoute ? [canonicalRoute] : (plan?.routes ?? [])),
+    [canonicalRoute, plan],
+  );
+  const displayedRouteId = canonicalRoute?.route_id ?? selectedRouteId;
+
+  // The route whose hazards, deviations and exposure the panels describe: the
+  // committed route when there is one, otherwise the operator's selection.
+  const displayedRoute = canonicalRoute ?? selectedRoute;
+
+  // Requirement 9: an accepted route must begin where the vessel actually is.
+  // The backend records the measured offset at activation; surfacing it here
+  // means a desynchronisation shows up as a visible warning instead of a
+  // silently wrong track on the globe.
+  const routeStartWarning = useMemo(() => {
+    const active = monitoring.activeRoute;
+    if (!active || active.start_offset_km == null) return null;
+    if (active.start_offset_km <= ACTIVE_ROUTE_START_TOLERANCE_KM) return null;
+    return `Accepted route start does not match current vessel position (off by ${Math.round(active.start_offset_km)} km).`;
+  }, [monitoring.activeRoute]);
+
+  useEffect(() => {
+    if (routeStartWarning) console.warn(`[BOREAS] ${routeStartWarning}`);
+  }, [routeStartWarning]);
 
   const showIce = layerVisibility.seaIce && phase !== 'setup' && Boolean(seaIce);
   const showIcebergs = layerVisibility.icebergs && phase !== 'setup';
@@ -211,15 +279,17 @@ function App() {
               sentinel2Visible={layerVisibility.satellite}
             />
 
-            {plan && layerVisibility.routes && (
+            {plan && layerVisibility.routes && displayedRoutes.length > 0 && (
               <MissionRouteLayer
                 viewer={v}
-                routes={plan.routes}
-                selectedRouteId={selectedRouteId}
+                routes={displayedRoutes}
+                selectedRouteId={displayedRouteId}
                 onSelectRoute={selectRoute}
-                originName={plan.origin_name}
+                originName={canonicalRoute ? 'Current position' : plan.origin_name}
                 destinationName={plan.destination_name}
-                focusSelectedOnly={phase === 'navigating'}
+                // Once a route is committed there is nothing to compare it
+                // against, so only the active track is drawn.
+                focusSelectedOnly={phase === 'navigating' || Boolean(canonicalRoute)}
               />
             )}
 
@@ -241,19 +311,19 @@ function App() {
               hotspots={weather.hotspots}
             />
 
-            {selectedRoute && layerVisibility.routes && (
+            {displayedRoute && layerVisibility.routes && (
               <RouteDeviationLayer
                 viewer={v}
                 visible={phase !== 'setup'}
-                deviations={selectedRoute.deviations}
+                deviations={displayedRoute.deviations}
               />
             )}
 
-            {selectedRoute && (
+            {displayedRoute && (
               <RouteHazardLayer
                 viewer={v}
                 visible={showIcebergs}
-                relevantIcebergs={selectedRoute.iceberg_exposure.relevant_icebergs}
+                relevantIcebergs={displayedRoute.iceberg_exposure.relevant_icebergs}
                 positions={icebergPositions}
                 focusedIcebergId={focusedIcebergId}
               />
@@ -333,7 +403,12 @@ function App() {
       )}
 
       {phase !== 'setup' && (
-        <FleetMonitoringPanel plan={plan} selectedRoute={selectedRoute} monitoring={monitoring} />
+        <FleetMonitoringPanel
+          plan={plan}
+          selectedRoute={selectedRoute}
+          monitoring={monitoring}
+          startWarning={routeStartWarning}
+        />
       )}
 
       {isProvenanceOpen && (
@@ -398,7 +473,8 @@ function App() {
               focusedIcebergId={focusedIcebergId}
               onSelectRoute={selectRoute}
               onFocusIceberg={setFocusedIcebergId}
-              onStartNavigation={handleStartNavigation}
+              committedRouteId={canonicalRoute?.route_id ?? null}
+          onStartNavigation={handleStartNavigation}
               onBack={backToSetup}
             />
           )}
@@ -411,9 +487,9 @@ function App() {
               destinationName={plan.destination_name}
               followVessel={followVessel}
               onToggleFollow={() => setFollowVessel((f) => !f)}
-              onSetSpeed={voyageControls.setSpeedMultiplier}
-              onPause={voyageControls.pause}
-              onResume={voyageControls.start}
+              onSetSpeed={(sp) => void monitoring.setSpeed(sp)}
+              onPause={() => void monitoring.pause()}
+              onResume={() => void monitoring.resume()}
               onEndNavigation={handleEndNavigation}
             />
           )}

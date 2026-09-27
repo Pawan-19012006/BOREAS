@@ -1713,3 +1713,11 @@ input[type='range']::-moz-range-thumb {
   padding-left: var(--space-4);
   padding-right: var(--space-4);
 }
+
+
+/* A route the vessel is not on, once it is committed to another: still readable
+   as a record of what was considered, but plainly not a live choice. */
+.route-card[data-superseded='true'] {
+  opacity: 0.45;
+  cursor: default;
+}

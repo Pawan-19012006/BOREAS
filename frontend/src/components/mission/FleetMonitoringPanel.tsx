@@ -17,6 +17,9 @@ interface FleetMonitoringPanelProps {
   plan: MissionPlanResponse | null;
   selectedRoute: RoutePlan | null;
   monitoring: UseFleetMonitoringReturn;
+  /** Set when the accepted route does not start at the vessel's actual
+   *  position -- a synchronisation fault that must be visible, not hidden. */
+  startWarning?: string | null;
 }
 
 function DeltaTag({ value, unit, lowerIsBetter = true }: { value: number; unit: string; lowerIsBetter?: boolean }) {
@@ -95,15 +98,21 @@ function PreviewComparison({ preview }: { preview: RouteUpdateCreate }) {
   );
 }
 
-export const FleetMonitoringPanel = ({ plan, selectedRoute, monitoring }: FleetMonitoringPanelProps) => {
-  const { stage, vesselState, preview, sentUpdate, resolvedUpdate, error, isBusy } = monitoring;
+export const FleetMonitoringPanel = ({
+  plan,
+  selectedRoute,
+  monitoring,
+  startWarning = null,
+}: FleetMonitoringPanelProps) => {
+  const { stage, vesselState, activeRoute, preview, sentUpdate, resolvedUpdate, error, isBusy } =
+    monitoring;
 
   if (!plan || !selectedRoute) return null;
 
   return (
     <aside className="fleet-monitoring-panel panel" aria-label="Fleet monitoring">
       <div className="panel-header">
-        <h2 className="panel-title">Fleet monitoring</h2>
+        <h2 className="panel-title">{stage === 'idle' ? 'Fleet monitoring' : 'Navigation active'}</h2>
         {stage !== 'idle' && (
           <span className="sim-badge" title="Position advanced from the active route's own distance/ETA">
             Simulated
@@ -112,28 +121,43 @@ export const FleetMonitoringPanel = ({ plan, selectedRoute, monitoring }: FleetM
       </div>
 
       <div className="panel-scroll">
+        {/* No "start monitoring" button. Monitoring is not an operational step
+            the operator opts into -- START NAVIGATION commits the route and
+            monitoring begins with it. Before that, this panel simply says so. */}
         {stage === 'idle' && (
           <section className="panel-section">
             <p className="field-hint" style={{ marginTop: 0 }}>
-              Hands the selected route to the vessel as its active route and starts tracking its
-              simulated position, so an environment change can be detected and a replan proposed
-              while under way.
+              Start navigation to hand the selected route to the vessel. Telemetry and monitoring
+              begin with it &mdash; the vessel stays stationary until then.
             </p>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={isBusy}
-              onClick={() => monitoring.startMonitoring(plan.mission_id, plan.vessel.id, selectedRoute)}
-            >
-              {isBusy ? 'Starting…' : 'Start monitoring'}
-            </button>
           </section>
         )}
 
         {stage !== 'idle' && vesselState && (
           <section className="panel-section">
-            <p className="section-label">Vessel position</p>
+            {/* Monitoring is a state, not a button: it is live whenever the
+                vessel is under way, and says plainly when it is frozen. */}
+            <p className="section-label">
+              {vesselState.is_under_way ? (
+                <span className="live-dot-label">
+                  <span className="live-dot" /> Monitoring live
+                </span>
+              ) : (
+                <span className="live-dot-label">
+                  <span className="live-dot" data-paused="true" /> Telemetry paused for replanning
+                </span>
+              )}
+            </p>
             <dl style={{ margin: 0 }}>
+              {/* Which route the vessel is actually on, straight from the
+                  coordination backend -- after an accepted update this is the
+                  new route, not the one originally selected on Shore. */}
+              {activeRoute && (
+                <div className="data-row">
+                  <dt>Active route</dt>
+                  <dd>{sentenceCase(activeRoute.route.label)}</dd>
+                </div>
+              )}
               <div className="data-row">
                 <dt>Position</dt>
                 <dd>
@@ -143,8 +167,14 @@ export const FleetMonitoringPanel = ({ plan, selectedRoute, monitoring }: FleetM
               <div className="data-row">
                 <dt>Speed / course</dt>
                 <dd>
-                  {vesselState.speed_kt.toFixed(1)} kt
-                  {vesselState.heading_deg !== null ? ` · ${vesselState.heading_deg.toFixed(0)}°` : ''}
+                  {vesselState.is_under_way ? (
+                    <>
+                      {vesselState.speed_kt.toFixed(1)} kt
+                      {vesselState.heading_deg !== null ? ` · ${vesselState.heading_deg.toFixed(0)}°` : ''}
+                    </>
+                  ) : (
+                    'Stopped — position held'
+                  )}
                 </dd>
               </div>
               <div className="data-row">
@@ -155,7 +185,17 @@ export const FleetMonitoringPanel = ({ plan, selectedRoute, monitoring }: FleetM
                 <dt>Remaining</dt>
                 <dd>{kmToNm(vesselState.distance_remaining_km).toFixed(0)} NM</dd>
               </div>
+              <div className="data-row">
+                <dt>Last telemetry</dt>
+                <dd>{vesselState.updated_at.replace('T', ' ').slice(11, 19)} UTC</dd>
+              </div>
             </dl>
+            {startWarning && (
+              <p className="notice notice-warn" style={{ marginTop: 'var(--space-3)' }}>
+                {startWarning}
+              </p>
+            )}
+
             <div className="progress-track" style={{ marginTop: 'var(--space-2)' }}>
               <div
                 className="progress-fill"
@@ -243,12 +283,12 @@ export const FleetMonitoringPanel = ({ plan, selectedRoute, monitoring }: FleetM
           )}
           {stage === 'resolved' && (
             <button type="button" className="btn btn-primary" style={{ width: '100%' }} onClick={monitoring.acknowledgeResolution}>
-              Continue monitoring
+              Continue
             </button>
           )}
           {(stage === 'monitoring' || stage === 'pending') && (
-            <button type="button" className="btn btn-ghost" style={{ width: '100%' }} onClick={monitoring.stopMonitoring}>
-              Stop monitoring
+            <button type="button" className="btn btn-ghost" style={{ width: '100%' }} onClick={monitoring.endNavigation}>
+              End navigation
             </button>
           )}
         </div>

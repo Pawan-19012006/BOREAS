@@ -15,6 +15,7 @@ import {
   HeadingPitchRange,
   Math as CesiumMath,
   Matrix4,
+  Transforms,
   type Viewer,
 } from 'cesium';
 import type { MissionPhase } from './useMissionPlanner';
@@ -155,14 +156,21 @@ export function useMissionCamera({
 
     if (!followVessel) return;
 
-    // Steady tracking afterwards: setView, not flyTo, so each tick doesn't
-    // queue a competing animation.
-    viewer.camera.lookAt(
-      Cartesian3.fromDegrees(vesselPosition[0], vesselPosition[1], 0),
-      new HeadingPitchRange(
-        CesiumMath.toRadians(vesselHeadingDeg ?? 180),
-        CesiumMath.toRadians(CHASE_PITCH_DEG),
-        CHASE_RANGE_M,
+    // Steady tracking afterwards. This deliberately moves only the reference
+    // FRAME and never re-applies a HeadingPitchRange offset.
+    //
+    // `camera.lookAt(target, offset)` re-seats the camera at that exact offset
+    // every time it runs. Called from an effect that fires on every position
+    // tick, it silently discarded whatever the operator had just done: a zoom
+    // or a pan was undone by the next poll a second later, which reads as a
+    // camera that cannot be zoomed or panned at all.
+    //
+    // `lookAtTransform(frame)` with no offset re-anchors the same view to the
+    // vessel's new position and preserves the operator's current zoom and
+    // orientation within that frame, so following and manual control coexist.
+    viewer.camera.lookAtTransform(
+      Transforms.eastNorthUpToFixedFrame(
+        Cartesian3.fromDegrees(vesselPosition[0], vesselPosition[1], 0),
       ),
     );
   }, [viewer, phase, vesselPosition, vesselHeadingDeg, followVessel]);

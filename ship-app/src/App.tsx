@@ -12,6 +12,7 @@ import RouteUpdateAlert from './components/RouteUpdateAlert';
 import VesselSelector from './components/VesselSelector';
 import { useShipSession } from './hooks/useShipSession';
 import { getRoster, type RosterVessel } from './services/api';
+import { formatLatitude, formatLongitude } from './lib/format';
 import './styles.css';
 
 function App() {
@@ -75,7 +76,19 @@ function App() {
       {session.lastResolved && !session.pendingUpdate && (
         <div className={`resolution-banner ${session.lastResolved.status === 'ACCEPTED' ? 'accepted' : 'declined'}`}>
           <span>
-            Route update {session.lastResolved.status === 'ACCEPTED' ? 'accepted — now on the new route.' : 'declined — remaining on the current route.'}
+            {session.lastResolved.status === 'ACCEPTED' ? (
+              <>
+                Route update accepted &mdash; now on{' '}
+                {session.activeRoute?.route.label ?? 'the new route'}, starting from the current
+                position
+                {session.vesselState
+                  ? ` (${formatLatitude(session.vesselState.latitude)}, ${formatLongitude(session.vesselState.longitude)})`
+                  : ''}
+                .
+              </>
+            ) : (
+              'Route update declined — remaining on the current route.'
+            )}
           </span>
           <button type="button" className="btn-link" onClick={session.dismissResolution}>
             Dismiss

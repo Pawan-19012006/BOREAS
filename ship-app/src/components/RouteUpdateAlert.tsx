@@ -3,7 +3,7 @@
 // objects (old and new) and the deltas between them -- nothing is
 // recalculated or invented in this component.
 
-import { formatDuration, kmToNm, sentenceCase } from '../lib/format';
+import { formatDuration, formatLatitude, formatLongitude, kmToNm, sentenceCase } from '../lib/format';
 import type { RouteUpdate } from '../services/api';
 
 interface RouteUpdateAlertProps {
@@ -44,6 +44,7 @@ function RouteBlock({ title, route }: { title: string; route: RouteUpdate['old_r
 }
 
 export const RouteUpdateAlert = ({ update, isDeciding, error, onDecide }: RouteUpdateAlertProps) => {
+  const snapshot = update.origin_snapshot;
   return (
     <div className="route-update-overlay" role="alertdialog" aria-modal="true" aria-label="Route update request">
       <div className="route-update-card">
@@ -55,6 +56,16 @@ export const RouteUpdateAlert = ({ update, isDeciding, error, onDecide }: RouteU
         </div>
 
         <p className="route-update-reason">{update.reason}</p>
+
+        {/* The vessel is held at this exact position until the decision is
+            made, and the proposed route starts here -- so the Captain is
+            deciding against a position that cannot move underneath them. */}
+        {snapshot && (
+          <p className="route-update-origin">
+            Position locked &mdash; {formatLatitude(snapshot.latitude)},{' '}
+            {formatLongitude(snapshot.longitude)}
+          </p>
+        )}
 
         <RouteBlock title="Current route" route={update.old_route} />
         <RouteBlock title="Proposed route" route={update.new_route} />

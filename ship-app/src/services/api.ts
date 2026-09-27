@@ -74,6 +74,19 @@ export interface ActiveRoute {
   horizon_hours: number;
   activated_at: string;
   supersedes_update_id: string | null;
+  /** Distance already sailed on PREVIOUS active routes of this mission, so
+   *  mission progress stays continuous across a replan. */
+  distance_travelled_before_km: number;
+  /** Shared demo time-acceleration. Lives on the backend so Shore and Ship
+   *  cannot run at different speeds. */
+  speed_multiplier: number;
+  /** Null while the vessel is frozen (e.g. awaiting a route decision). */
+  running_since: string | null;
+  paused_reason: string | null;
+  /** How far this route's first coordinate sat from the vessel's actual
+   *  position at activation. ~0 for a replan from current position; a large
+   *  value means Shore and Ship desynchronised. Null on initial activation. */
+  start_offset_km: number | null;
 }
 
 export interface VesselState {
@@ -90,6 +103,10 @@ export interface VesselState {
   next_waypoint_index: number;
   progress_fraction: number;
   is_complete: boolean;
+  /** False while simulated movement is frozen for a route decision. */
+  is_under_way: boolean;
+  paused_reason: string | null;
+  speed_multiplier: number;
   activated_at: string;
   updated_at: string;
   provenance: string;
@@ -113,6 +130,8 @@ export interface RouteUpdate {
   reason: string;
   created_at: string;
   current_position: [number, number];
+  /** The frozen position this reroute was planned from. */
+  origin_snapshot: { longitude: number; latitude: number; captured_at: string } | null;
   old_route: RoutePlan;
   new_route: RoutePlan;
   distance_delta: number;

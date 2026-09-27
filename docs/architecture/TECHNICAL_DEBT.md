@@ -200,3 +200,30 @@ This document provides a categorized, evidence-based audit of technical debt, la
 - **Evidence**: Wave height carries weight 0.50 and is diagnosed from local wind (~0.14 x wind_kt), so in a strong system both the wind and wave terms saturate and the wave term wins on weight alone. `LOW_VISIBILITY` (weight 0.16) can never be the dominant driver in the current field.
 - **Analysis**: Defensible — significant wave height really is what forces a vessel to slow or alter course — but it makes the driver label carry less information than it could. A real forecast feed with independent wave and visibility fields would fix this without changing the severity model.
 - **Impact**: The `primary_driver` field is less discriminating than the four-value enum suggests.
+
+
+## 9. Active-Route Lifecycle
+
+### TD-18: Shore's `navigating` Phase Runs a Second, Independent Vessel Simulation — RESOLVED
+- **Category**: Duplicate Source of Truth
+- **Location**: `frontend/src/simulation/voyageSimulation.ts` vs `boreas_core/coordination/service.py:compute_vessel_state`
+- **Evidence**: With both "Start navigation" and "Start monitoring" active, the Under-way panel and the Fleet-monitoring panel show different positions and different progress for the same vessel (e.g. 44°S / 25% vs 51°S / 44%), because each advances its own clock from its own zero point.
+- **Analysis**: The client-side voyage simulation predates the coordination backend and was never folded into it. The coordination path (Fleet monitoring, Ship app) is correctly single-source; the older client-side `navigating` phase is not. They do not corrupt each other — nothing writes back — but they disagree on screen.
+- **Impact**: Two positions for one vessel.
+- **Resolution**: The client-side simulator was removed. `simulation/canonicalVoyage.ts` adapts the backend's `VesselState` into the shape `NavigationPanel` already consumed, so the navigation view, the fleet-monitoring panel and the Ship app all read one clock. `voyageSimulation.ts` now holds only shared types and the speed steps.
+
+### TD-19: A Stale Route Proposal Can Be Accepted Long After It Was Generated
+- **Category**: Workflow Correctness
+- **Location**: `boreas_core/coordination/service.py:respond_to_update`
+- **Evidence**: A proposal built at 41°S was accepted after the vessel had reached 54°S; the accepted route's first coordinate sat 3253 km astern. `ActiveRoute.start_offset_km` recorded it and Shore showed "Accepted route start does not match current vessel position (off by 3253 km)".
+- **Analysis**: The route is planned from the position held at PROPOSAL time; nothing re-validates it at ACCEPTANCE time. Detection is implemented (requirement 9) and is deliberately where the fix stops: silently re-planning at acceptance would hand the Captain a different route from the one they approved, and snapping the first coordinate to the current position would fabricate a leg the planner never costed. Exaggerated here by the 1.5 sim-hours-per-second clock.
+- **Impact**: An operator can accept a proposal that no longer starts where the vessel is.
+- **Resolution**: The vessel is now FROZEN from the moment the environment change fires until the Captain decides (`ActiveRoute.running_since = None`, `paused_reason = AWAITING_ROUTE_DECISION`). The position cannot drift underneath the decision, so `start_offset_km` is 0 on a normal accept. The warning remains as a guard for any path that bypasses the freeze.
+
+
+### TD-20: A Replan Near the Coast Can Begin With a Short Backtrack
+- **Category**: Route Geometry (pre-existing)
+- **Location**: `boreas_core/mission/planner.py` (start-cell snapping on a 1° grid)
+- **Evidence**: Replanning from (18.43°E, 34.48°S) produced a route whose second waypoint was (18.0°E, 34.0°S) — north-west of the start, so the vessel briefly steers away from the destination before turning east.
+- **Analysis**: The custom start position is snapped to the coarse navigation grid, and from that cell A* genuinely finds its cheapest path out through a neighbouring coastal cell. The cost is real, not an artifact of the state machine; it is simply visible because it happens at the very first leg. Roughly 60 km on a 5,900 km passage.
+- **Impact**: Looks like the vessel is going backwards immediately after a replan near port. A finer grid near the coast, or seeding the search with the vessel's current heading, would remove it.

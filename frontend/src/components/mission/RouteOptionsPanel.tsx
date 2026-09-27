@@ -32,6 +32,11 @@ interface RouteOptionsPanelProps {
   onFocusIceberg: (id: string | null) => void;
   onStartNavigation: () => void;
   onBack: () => void;
+  /** Set once the vessel is committed to a route via the coordination backend.
+   *  Those alternatives are no longer choices -- the vessel is sailing one of
+   *  them -- so the list becomes a record of what is active rather than a
+   *  picker that silently does nothing. */
+  committedRouteId?: RouteId | null;
 }
 
 function DeltaTag({ value, unit }: { value: number; unit: string }) {
@@ -51,10 +56,14 @@ function RouteCard({
   route,
   isSelected,
   onSelect,
+  isCommitted = false,
+  isSuperseded = false,
 }: {
   route: RoutePlan;
   isSelected: boolean;
   onSelect: () => void;
+  isCommitted?: boolean;
+  isSuperseded?: boolean;
 }) {
   const ice = route.sea_ice_exposure;
   const hotBergs = route.iceberg_exposure.relevant_icebergs.filter(
@@ -67,12 +76,21 @@ function RouteCard({
       type="button"
       className="route-card"
       data-selected={isSelected}
+      data-superseded={isSuperseded}
       aria-pressed={isSelected}
+      // Selecting an alternative once the vessel is underway would change
+      // nothing on the globe -- the active route comes from the backend -- so
+      // the card is disabled rather than being a control that lies.
+      disabled={isSuperseded}
       onClick={onSelect}
     >
       <div className="route-card-head">
         <span className="route-card-name">{sentenceCase(route.label)}</span>
-        {route.route_id === 'recommended' && <span className="tag tag-recommended">Advised</span>}
+        {isCommitted ? (
+          <span className="tag tag-recommended">Active</span>
+        ) : (
+          route.route_id === 'recommended' && <span className="tag tag-recommended">Advised</span>
+        )}
       </div>
       <div className="route-objective">{route.objective}</div>
 
@@ -273,6 +291,7 @@ export const RouteOptionsPanel = ({
   onFocusIceberg,
   onStartNavigation,
   onBack,
+  committedRouteId = null,
 }: RouteOptionsPanelProps) => {
   const selected = plan.routes.find((r) => r.route_id === selectedRouteId) ?? plan.routes[0];
   const weather = selected.weather_exposure;
@@ -295,6 +314,8 @@ export const RouteOptionsPanel = ({
                 key={route.route_id}
                 route={route}
                 isSelected={route.route_id === selected.route_id}
+                isCommitted={committedRouteId === route.route_id}
+                isSuperseded={Boolean(committedRouteId) && committedRouteId !== route.route_id}
                 onSelect={() => onSelectRoute(route.route_id)}
               />
             ))}
