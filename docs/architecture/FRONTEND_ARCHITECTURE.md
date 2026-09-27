@@ -175,6 +175,21 @@ explorer-only layers that remain unmounted still use the naive pattern.
   applies, not an operator preference — and every displayed value comes from the `/mission/plan`
   response. "Why the track bends" lists the route's `deviations`, filtering out `NAVIGATION_COST`
   so no bend is given a hazard explanation it does not have.
+- `hooks/useMapRouteState.ts`: what the globe draws, as one explicit state
+  (`PLANNING` / `NAVIGATING` / `REROUTING` / `PROPOSAL_SELECTED`) derived from the coordination
+  backend's `ActiveRoute` and `RouteUpdate` rather than render-site booleans. It emits a list of
+  `MapTrack`s, each tagged `active` / `proposal` / `candidate` / `superseded`, and both the route
+  cards and `MissionRouteLayer` read that same list, so the panel and the map cannot disagree.
+  A resolved (non-PENDING) update is deliberately excluded, otherwise an accepted route would be
+  drawn twice — once as active, once as its own stale proposal.
+- `layers/MissionRouteLayer.tsx`: renders exactly the tracks it is given; it does not decide what
+  is active. `TRACK_STYLES` holds the hierarchy — the active course is the only solid, cased amber
+  line, a proposal is teal dashed (a different hue, so it can never be misread as the active
+  course at a glance), candidates are lighter steel dashes, and a superseded route is subdued but
+  still legible. Entity ids are keyed by track, not by `route_id`: during a reroute the active
+  route and a proposal can share a `route_id`, which was a duplicate-id crash. The origin endpoint
+  marker is suppressed once the vessel is under way, since it would sit under the ship captioned
+  "Current position" — which the vessel's own label already says.
 - `simulation/canonicalVoyage.ts`: adapts the backend's canonical `VesselState` into the
   `VoyageState` shape `NavigationPanel` already consumed. Shore no longer runs a client-side voyage
   simulation — there is one simulated clock and it lives in `boreas-core`, so the navigation view,
@@ -208,6 +223,21 @@ explorer-only layers that remain unmounted still use the naive pattern.
   to poll in one action, so there is no "Start monitoring" button. The panel is an informational
   state — `Navigation active` with `Monitoring live`, or `Telemetry paused for replanning` while a
   route decision is outstanding and the vessel is frozen.
+- `hooks/useMapRouteState.ts`: what the globe draws, as one explicit state
+  (`PLANNING` / `NAVIGATING` / `REROUTING` / `PROPOSAL_SELECTED`) derived from the coordination
+  backend's `ActiveRoute` and `RouteUpdate` rather than render-site booleans. It emits a list of
+  `MapTrack`s, each tagged `active` / `proposal` / `candidate` / `superseded`, and both the route
+  cards and `MissionRouteLayer` read that same list, so the panel and the map cannot disagree.
+  A resolved (non-PENDING) update is deliberately excluded, otherwise an accepted route would be
+  drawn twice — once as active, once as its own stale proposal.
+- `layers/MissionRouteLayer.tsx`: renders exactly the tracks it is given; it does not decide what
+  is active. `TRACK_STYLES` holds the hierarchy — the active course is the only solid, cased amber
+  line, a proposal is teal dashed (a different hue, so it can never be misread as the active
+  course at a glance), candidates are lighter steel dashes, and a superseded route is subdued but
+  still legible. Entity ids are keyed by track, not by `route_id`: during a reroute the active
+  route and a proposal can share a `route_id`, which was a duplicate-id crash. The origin endpoint
+  marker is suppressed once the vessel is under way, since it would sit under the ship captioned
+  "Current position" — which the vessel's own label already says.
 - `simulation/canonicalVoyage.ts`: adapts the backend's canonical `VesselState` into the
   `VoyageState` shape `NavigationPanel` already consumed. Shore no longer runs a client-side voyage
   simulation — there is one simulated clock and it lives in `boreas-core`, so the navigation view,

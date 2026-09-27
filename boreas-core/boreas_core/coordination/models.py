@@ -150,6 +150,15 @@ class RouteUpdateCreate(BaseModel):
     )
     old_route: RoutePlan
     new_route: RoutePlan
+    proposed_candidates: list[RoutePlan] = Field(
+        default_factory=list,
+        description=(
+            "Every strategy the replan produced from the frozen position, `new_route` included. "
+            "These are the planner's own real outputs -- the replan computes all three anyway, so "
+            "returning them lets Shore offer a genuine choice instead of discarding two real "
+            "routes. Shore may promote any of them to `new_route` before sending."
+        ),
+    )
 
 
 class RouteUpdate(BaseModel):

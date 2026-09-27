@@ -88,6 +88,9 @@ export interface RouteUpdateCreate {
   origin_snapshot: OriginSnapshot | null;
   old_route: RoutePlan;
   new_route: RoutePlan;
+  /** Every strategy the replan produced from the frozen position, `new_route`
+   *  included. Real planner output, not a re-derivation. */
+  proposed_candidates: RoutePlan[];
 }
 
 export interface RouteUpdate extends RouteUpdateCreate {

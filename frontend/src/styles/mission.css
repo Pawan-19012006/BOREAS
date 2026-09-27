@@ -1721,3 +1721,53 @@ input[type='range']::-moz-range-thumb {
   opacity: 0.45;
   cursor: default;
 }
+
+
+/* ===================== Proposal choice (reroute) ===================== */
+
+/* Which replanned candidate Shore puts forward. Reads as a compact list of
+   real options, not another card stack -- the comparison detail already sits
+   above it. */
+.proposal-choice {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.proposal-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm, 3px);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.proposal-option:hover {
+  border-color: var(--hairline-strong);
+}
+
+/* The chosen proposal is teal, matching the proposal track on the globe, so
+   the card and the map name the same thing. */
+.proposal-option[data-chosen='true'] {
+  border-color: #5fc9c0;
+  background: rgba(95, 201, 192, 0.09);
+}
+
+.proposal-option-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.proposal-option-metrics {
+  font-size: 11px;
+  color: var(--ink-muted);
+  letter-spacing: 0.03em;
+}

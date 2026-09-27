@@ -35,6 +35,7 @@ import { useMissionCamera } from './hooks/useMissionCamera';
 import { useObserveIntelligence } from './hooks/useObserveIntelligence';
 import { useForecastState } from './hooks/useForecastState';
 import { useSelectedEntity } from './hooks/useSelectedEntity';
+import { useMapRouteState } from './hooks/useMapRouteState';
 import { useWeatherHotspots } from './hooks/useWeatherHotspots';
 import { useSatelliteStatus } from './hooks/useSatelliteStatus';
 import { useFleetMonitoring } from './hooks/useFleetMonitoring';
@@ -42,6 +43,7 @@ import { useBackendStatus } from './services/backendStatus';
 import { voyageFromVesselState } from './simulation/canonicalVoyage';
 import { getMission } from './services/missionApi';
 import type { LonLat } from './lib/geo';
+import type { RouteId } from './services/missionApi';
 
 import './index.css';
 import './styles/mission.css';
@@ -80,10 +82,17 @@ const DEFAULT_LAYER_VISIBILITY: LayerVisibility = {
 function App() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [focusedIcebergId, setFocusedIcebergId] = useState<string | null>(null);
-  const [followVessel, setFollowVessel] = useState(true);
+  // Manual camera control is the default. Following is an explicit choice the
+  // operator makes (and the navigation panel toggles); nothing in the route
+  // lifecycle silently switches it back on, because having the camera snatched
+  // away after every route update is exactly what made the map feel broken.
+  const [followVessel, setFollowVessel] = useState(false);
   // Only has an effect at bottom-sheet widths; see .panel-dock in mission.css.
   const [isSheetCollapsed, setSheetCollapsed] = useState(false);
   const [isProvenanceOpen, setProvenanceOpen] = useState(false);
+  // Which replanned candidate Shore is putting forward. Null until the operator
+  // actively picks one, so the map shows the plain REROUTING comparison first.
+  const [proposedRouteId, setProposedRouteId] = useState<RouteId | null>(null);
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(DEFAULT_LAYER_VISIBILITY);
   // Drives the map's hazard state (sea ice raster + iceberg positions) and the
   // forecast timeline. Reset to the plan's own horizon whenever a new plan
@@ -142,7 +151,6 @@ function App() {
 
   const routeCoordinates = selectedRoute?.coordinates ?? null;
 
-  const monitoringVesselState = monitoring.vesselState;
   const monitoringRouteCoords = monitoring.activeRoute?.route.coordinates ?? null;
 
   // ONE simulated clock, and it is the backend's. Shore no longer advances a
@@ -187,21 +195,10 @@ function App() {
   // rebuilt this array -- and with it VesselNavLayer's whole Cesium
   // DataSource -- on every single render rather than only when the vessel
   // actually moved.
-  const monitoringCoveredPath = useMemo<LonLat[]>(() => {
-    if (!monitoringRouteCoords || !monitoringVesselState) return [];
-    const passed = monitoringRouteCoords.slice(
-      0,
-      monitoringVesselState.next_waypoint_index,
-    ) as LonLat[];
-    return [
-      ...passed,
-      [monitoringVesselState.longitude, monitoringVesselState.latitude] as LonLat,
-    ];
-  }, [monitoringRouteCoords, monitoringVesselState]);
 
   const handleEndNavigation = useCallback(() => {
     monitoring.endNavigation();
-    setFollowVessel(true);
+    setFollowVessel(false);
     backToPlanning();
   }, [monitoring, backToPlanning]);
 
@@ -210,7 +207,6 @@ function App() {
   // "start monitoring" step, because to an operator those are the same fact.
   const handleStartNavigation = useCallback(async () => {
     if (!plan || !selectedRoute) return;
-    setFollowVessel(true);
     await monitoring.beginNavigation(plan.mission_id, plan.vessel.id, selectedRoute);
     startNavigation();
   }, [plan, selectedRoute, monitoring, startNavigation]);
@@ -227,10 +223,16 @@ function App() {
   // route is committed. After commitment there is one answer, and it comes from
   // the backend, not from frontend state that can go stale.
   const canonicalRoute = monitoring.activeRoute?.route ?? null;
-  const displayedRoutes = useMemo(
-    () => (canonicalRoute ? [canonicalRoute] : (plan?.routes ?? [])),
-    [canonicalRoute, plan],
-  );
+
+  // What the map draws, as one explicit state derived from canonical backend
+  // state rather than a handful of render-site booleans. The route cards read
+  // the same derivation, so the globe and the panel cannot disagree.
+  const mapRoutes = useMapRouteState({
+    plan,
+    selectedRouteId,
+    monitoring,
+    proposedRouteId,
+  });
   const displayedRouteId = canonicalRoute?.route_id ?? selectedRouteId;
 
   // The route whose hazards, deviations and exposure the panels describe: the
@@ -251,6 +253,13 @@ function App() {
   useEffect(() => {
     if (routeStartWarning) console.warn(`[BOREAS] ${routeStartWarning}`);
   }, [routeStartWarning]);
+
+  // A proposal choice only means anything while a proposal is on the table.
+  // Clearing it when the preview goes away is what stops a stale selection from
+  // emphasising a route that no longer exists.
+  useEffect(() => {
+    if (!monitoring.preview && !monitoring.sentUpdate) setProposedRouteId(null);
+  }, [monitoring.preview, monitoring.sentUpdate]);
 
   const showIce = layerVisibility.seaIce && phase !== 'setup' && Boolean(seaIce);
   const showIcebergs = layerVisibility.icebergs && phase !== 'setup';
@@ -279,17 +288,15 @@ function App() {
               sentinel2Visible={layerVisibility.satellite}
             />
 
-            {plan && layerVisibility.routes && displayedRoutes.length > 0 && (
+            {plan && layerVisibility.routes && mapRoutes.tracks.length > 0 && (
               <MissionRouteLayer
                 viewer={v}
-                routes={displayedRoutes}
+                tracks={mapRoutes.tracks}
                 selectedRouteId={displayedRouteId}
                 onSelectRoute={selectRoute}
-                originName={canonicalRoute ? 'Current position' : plan.origin_name}
+                originName={plan.origin_name}
                 destinationName={plan.destination_name}
-                // Once a route is committed there is nothing to compare it
-                // against, so only the active track is drawn.
-                focusSelectedOnly={phase === 'navigating' || Boolean(canonicalRoute)}
+                monitoringUnderway={Boolean(canonicalRoute)}
               />
             )}
 
@@ -329,31 +336,21 @@ function App() {
               />
             )}
 
-            {phase === 'navigating' && voyage && selectedRoute && (
+            {/* ONE vessel marker. There used to be two -- a navigating-phase
+                marker and a fleet-monitoring marker -- which, now that both read
+                the same canonical VesselState, drew the same ship twice with
+                overlapping labels stacked on top of each other. */}
+            {voyage && canonicalRoute && (
               <VesselNavLayer
                 viewer={v}
                 position={voyage.position}
                 headingDeg={voyage.bearingDeg}
-                vesselName={vesselName ?? 'Vessel'}
+                vesselName={vesselName ?? plan?.vessel.name ?? 'Vessel'}
+                speedKt={voyage.speedKt}
+                isUnderWay={voyage.isUnderway}
                 coveredPath={coveredPath}
                 nextWaypoint={
-                  (selectedRoute.coordinates[voyage.nextWaypointIndex] as LonLat) ?? null
-                }
-              />
-            )}
-
-            {monitoring.vesselState && monitoring.activeRoute && (
-              <VesselNavLayer
-                viewer={v}
-                dataSourceName="fleet-monitoring-vessel"
-                position={[monitoring.vesselState.longitude, monitoring.vesselState.latitude]}
-                headingDeg={monitoring.vesselState.heading_deg}
-                vesselName={`${plan?.vessel.name ?? 'Vessel'} · monitored`}
-                coveredPath={monitoringCoveredPath}
-                nextWaypoint={
-                  (monitoring.activeRoute.route.coordinates[
-                    monitoring.vesselState.next_waypoint_index
-                  ] as LonLat) ?? null
+                  (canonicalRoute.coordinates[voyage.nextWaypointIndex] as LonLat) ?? null
                 }
               />
             )}
@@ -408,6 +405,8 @@ function App() {
           selectedRoute={selectedRoute}
           monitoring={monitoring}
           startWarning={routeStartWarning}
+          proposedRouteId={proposedRouteId}
+          onChooseProposal={setProposedRouteId}
         />
       )}
 

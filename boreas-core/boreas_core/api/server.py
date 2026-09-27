@@ -732,6 +732,11 @@ def coordination_simulate_environment_change(request: SimulateChangeRequest) -> 
     new_route = next((r for r in plan.routes if r.route_id == "recommended"), plan.routes[0])
     reason = coordination.describe_route_change(active.route, new_route, active.horizon_hours, new_horizon)
 
+    # Every candidate the replan produced, recommended first. The planner
+    # computes all three regardless, so discarding two real routes would be
+    # throwing away work and leaving Shore with no choice to offer.
+    candidates = [new_route] + [r for r in plan.routes if r.route_id != new_route.route_id]
+
     return RouteUpdateCreate(
         mission_id=active.mission_id,
         vessel_id=active.vessel_id,
@@ -740,6 +745,7 @@ def coordination_simulate_environment_change(request: SimulateChangeRequest) -> 
         origin_snapshot=snapshot,
         old_route=active.route,
         new_route=new_route,
+        proposed_candidates=candidates,
     )
 
 

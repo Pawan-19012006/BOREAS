@@ -10,7 +10,7 @@
 import { formatDuration, formatLatitude, formatLongitude, kmToNm } from '../../lib/geo';
 import { levelLabel, sentenceCase } from '../../lib/format';
 import type { RouteUpdateCreate } from '../../services/coordinationApi';
-import type { MissionPlanResponse, RoutePlan } from '../../services/missionApi';
+import type { MissionPlanResponse, RouteId, RoutePlan } from '../../services/missionApi';
 import type { UseFleetMonitoringReturn } from '../../hooks/useFleetMonitoring';
 
 interface FleetMonitoringPanelProps {
@@ -20,6 +20,10 @@ interface FleetMonitoringPanelProps {
   /** Set when the accepted route does not start at the vessel's actual
    *  position -- a synchronisation fault that must be visible, not hidden. */
   startWarning?: string | null;
+  /** Which replanned candidate is being put forward, and how to change it.
+   *  Shared with the map so the emphasised track and the chosen card agree. */
+  proposedRouteId: RouteId | null;
+  onChooseProposal: (id: RouteId) => void;
 }
 
 function DeltaTag({ value, unit, lowerIsBetter = true }: { value: number; unit: string; lowerIsBetter?: boolean }) {
@@ -103,6 +107,8 @@ export const FleetMonitoringPanel = ({
   selectedRoute,
   monitoring,
   startWarning = null,
+  proposedRouteId,
+  onChooseProposal,
 }: FleetMonitoringPanelProps) => {
   const { stage, vesselState, activeRoute, preview, sentUpdate, resolvedUpdate, error, isBusy } =
     monitoring;
@@ -224,6 +230,37 @@ export const FleetMonitoringPanel = ({
           <section className="panel-section">
             <p className="section-label">New route available</p>
             <PreviewComparison preview={preview} />
+
+            {/* The replan produced every strategy from the frozen position, so
+                the operator picks which one to put forward rather than being
+                handed one. Selecting here emphasises that track on the globe. */}
+            {preview.proposed_candidates.length > 1 && (
+              <div className="proposal-choice">
+                <p className="field-hint" style={{ marginBottom: 'var(--space-2)' }}>
+                  Route to propose
+                </p>
+                {preview.proposed_candidates.map((candidate) => {
+                  const isChosen = candidate.route_id === proposedRouteId;
+                  return (
+                    <button
+                      key={candidate.route_id}
+                      type="button"
+                      className="proposal-option"
+                      data-chosen={isChosen}
+                      aria-pressed={isChosen}
+                      onClick={() => onChooseProposal(candidate.route_id)}
+                    >
+                      <span className="proposal-option-name">{sentenceCase(candidate.label)}</span>
+                      <span className="proposal-option-metrics">
+                        {kmToNm(candidate.distance_km).toFixed(0)} NM &middot;{' '}
+                        {formatDuration(candidate.eta_hours)} &middot;{' '}
+                        {candidate.estimated_fuel.tonnes.toFixed(0)} t
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 
@@ -276,7 +313,12 @@ export const FleetMonitoringPanel = ({
               <button type="button" className="btn btn-ghost" onClick={monitoring.discardPreview} disabled={isBusy}>
                 Discard
               </button>
-              <button type="button" className="btn btn-primary" onClick={monitoring.sendUpdate} disabled={isBusy}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void monitoring.sendUpdate(proposedRouteId ?? undefined)}
+                disabled={isBusy}
+              >
                 Send route update
               </button>
             </>

@@ -28,26 +28,77 @@ import { sentenceCase } from '../lib/format';
 
 const ROUTE_HEIGHT_M = 2000;
 const CASING_WIDTH = 11;
-const SELECTED_WIDTH = 5;
-const ALTERNATE_WIDTH = 2.5;
 
-const SELECTED_COLOR = '#ffb300'; // signal amber -- bridge-instrument convention
+/** Visual hierarchy, in the order the map must communicate it.
+ *
+ *  The active route is the only solid, cased, amber line -- bridge-instrument
+ *  convention, and the one thing on the globe that should read as "this is what
+ *  the ship is doing". A proposal is deliberately a different hue rather than a
+ *  dimmer amber, so it can never be mistaken for the active course at a glance;
+ *  candidates recede further. Nothing here is neon: every colour is desaturated
+ *  enough to sit over pack ice and terrain without shouting. */
+const TRACK_STYLES = {
+  active: {
+    color: '#ffb300',
+    width: 5,
+    alpha: 1,
+    dash: null as number | null,
+    cased: true,
+  },
+  proposal: {
+    // Cool teal: clearly a different proposition from the amber active course.
+    color: '#5fc9c0',
+    width: 3.5,
+    alpha: 0.95,
+    dash: 16,
+    cased: false,
+  },
+  candidate: {
+    color: '#8ea6bd', // desaturated steel
+    width: 2.5,
+    alpha: 0.6,
+    dash: 8,
+    cased: false,
+  },
+  superseded: {
+    // The route being left behind: still legible, clearly no longer the point.
+    color: '#8a7550',
+    width: 2.5,
+    alpha: 0.5,
+    dash: null,
+    cased: false,
+  },
+} as const;
+
+export type TrackVariant = keyof typeof TRACK_STYLES;
+
 const SELECTED_CASING = '#1a1205';
-const ALTERNATE_COLOR = '#8ea6bd'; // desaturated steel
 
 /** Where along each alternate its caption sits, by route order. Spread apart
  *  so captions don't collide where the routes run close together. */
 const LABEL_FRACTIONS = [0.34, 0.62, 0.46];
 
+/** One track to draw, already classified by the map's state machine
+ *  (`useMapRouteState`). The layer renders exactly what it is given -- it does
+ *  not decide what is active, which is what keeps the globe and the route cards
+ *  from ever disagreeing. */
+export interface RouteTrack {
+  key: string;
+  route: RoutePlan;
+  variant: TrackVariant;
+  caption: string;
+}
+
 interface MissionRouteLayerProps {
   viewer: Viewer;
-  routes: RoutePlan[];
+  tracks: RouteTrack[];
   selectedRouteId: RouteId | null;
   onSelectRoute?: (id: RouteId) => void;
   originName: string;
   destinationName: string;
-  /** Dims alternates entirely -- used once navigation is underway. */
-  focusSelectedOnly?: boolean;
+  /** True once the vessel is committed and under way. Suppresses the origin
+   *  endpoint marker, which would otherwise sit under the vessel. */
+  monitoringUnderway?: boolean;
 }
 
 function toPositions(coordinates: [number, number][]): Cartesian3[] {
@@ -56,12 +107,12 @@ function toPositions(coordinates: [number, number][]): Cartesian3[] {
 
 export const MissionRouteLayer = ({
   viewer,
-  routes,
+  tracks,
   selectedRouteId,
   onSelectRoute,
   originName,
   destinationName,
-  focusSelectedOnly = false,
+  monitoringUnderway = false,
 }: MissionRouteLayerProps) => {
   // Kept in a ref so the click handler is installed once but always sees the
   // current callback, avoiding a re-registered handler on every render.
@@ -74,22 +125,21 @@ export const MissionRouteLayer = ({
     viewer,
     'mission-routes',
     (source) => {
-      // Draw alternates first so the selected route always composites on top.
-      const ordered = [...routes].sort((a, b) => {
-        const aSel = a.route_id === selectedRouteId ? 1 : 0;
-        const bSel = b.route_id === selectedRouteId ? 1 : 0;
-        return aSel - bSel;
-      });
+      // Weakest first, so the active course always composites on top of
+      // whatever else is on screen.
+      const order: TrackVariant[] = ['candidate', 'superseded', 'proposal', 'active'];
+      const ordered = [...tracks].sort(
+        (a, b) => order.indexOf(a.variant) - order.indexOf(b.variant),
+      );
 
-      ordered.forEach((route) => {
-        const isSelected = route.route_id === selectedRouteId;
-        if (focusSelectedOnly && !isSelected) return;
+      ordered.forEach((track, index) => {
+        const style = TRACK_STYLES[track.variant];
+        const positions = toPositions(track.route.coordinates);
+        const color = Color.fromCssColorString(style.color).withAlpha(style.alpha);
 
-        const positions = toPositions(route.coordinates);
-
-        if (isSelected) {
-          // Casing: a dark, wider line underneath keeps the amber readable
-          // where the route crosses bright pack ice.
+        if (style.cased) {
+          // A dark, wider line underneath keeps the active course readable
+          // where it crosses bright pack ice.
           source.entities.add({
             polyline: {
               positions,
@@ -98,71 +148,62 @@ export const MissionRouteLayer = ({
               clampToGround: false,
             },
           });
-
-          source.entities.add({
-            id: `route:${route.route_id}`,
-            polyline: {
-              positions,
-              width: SELECTED_WIDTH,
-              material: new PolylineOutlineMaterialProperty({
-                color: Color.fromCssColorString(SELECTED_COLOR),
-                outlineColor: Color.fromCssColorString('#4a2f00').withAlpha(0.9),
-                outlineWidth: 1.5,
-              }),
-              clampToGround: false,
-            },
-          });
-        } else {
-          source.entities.add({
-            id: `route:${route.route_id}`,
-            polyline: {
-              positions,
-              width: ALTERNATE_WIDTH,
-              material: new PolylineDashMaterialProperty({
-                color: Color.fromCssColorString(ALTERNATE_COLOR).withAlpha(0.7),
-                dashLength: 14,
-              }),
-              clampToGround: false,
-            },
-          });
-
-          // A label on the alternate makes it obvious it can be picked. Each
-          // alternate is labelled at a different fraction along its own track:
-          // routes converge near both endpoints, so labelling them all at the
-          // same fraction drops the captions on top of each other and, worse,
-          // on top of the selected course.
-          const labelFraction =
-            LABEL_FRACTIONS[
-              routes.findIndex((r) => r.route_id === route.route_id) % LABEL_FRACTIONS.length
-            ];
-          const mid = route.coordinates[Math.floor(route.coordinates.length * labelFraction)];
-          if (mid) {
-            source.entities.add({
-              id: `route-label:${route.route_id}`,
-              position: Cartesian3.fromDegrees(mid[0], mid[1], ROUTE_HEIGHT_M),
-              label: {
-                text: sentenceCase(route.label),
-                font: '500 12px Barlow, sans-serif',
-                fillColor: Color.fromCssColorString(ALTERNATE_COLOR),
-                showBackground: true,
-                backgroundColor: Color.fromCssColorString('#0a1420').withAlpha(0.82),
-                backgroundPadding: new Cartesian2(7, 4),
-                style: LabelStyle.FILL,
-                verticalOrigin: VerticalOrigin.CENTER,
-                pixelOffset: new Cartesian2(0, -14),
-                // Alternates' labels would otherwise clutter the overview at
-                // low zoom, where the routes nearly converge.
-                distanceDisplayCondition: undefined,
-                translucencyByDistance: undefined,
-              },
-            });
-          }
         }
+
+        source.entities.add({
+          id: `route:${track.key}:${track.route.route_id}`,
+          polyline: {
+            positions,
+            width: style.width,
+            material: style.dash
+              ? new PolylineDashMaterialProperty({ color, dashLength: style.dash })
+              : new PolylineOutlineMaterialProperty({
+                  color,
+                  outlineColor: Color.fromCssColorString('#4a2f00').withAlpha(0.9),
+                  outlineWidth: 1.5,
+                }),
+            clampToGround: false,
+          },
+        });
+
+        // Caption every track EXCEPT the active one: the active course needs no
+        // label to be identified, and one fewer floating box is one less thing
+        // overlapping the vessel.
+        if (track.variant === 'active') return;
+
+        // Tracks converge at both ends, so captioning them all at the same
+        // fraction drops the boxes on top of each other. Spreading them keeps
+        // each readable.
+        const labelFraction = LABEL_FRACTIONS[index % LABEL_FRACTIONS.length];
+        const mid = track.route.coordinates[
+          Math.floor(track.route.coordinates.length * labelFraction)
+        ];
+        if (!mid) return;
+
+        source.entities.add({
+          id: `route-label:${track.key}:${track.route.route_id}`,
+          position: Cartesian3.fromDegrees(mid[0], mid[1], ROUTE_HEIGHT_M),
+          label: {
+            text: sentenceCase(track.caption),
+            font: '500 12px Barlow, sans-serif',
+            fillColor: color,
+            showBackground: true,
+            backgroundColor: Color.fromCssColorString('#0a1420').withAlpha(0.82),
+            backgroundPadding: new Cartesian2(7, 4),
+            style: LabelStyle.FILL,
+            verticalOrigin: VerticalOrigin.CENTER,
+            pixelOffset: new Cartesian2(0, index % 2 === 0 ? -14 : 16),
+          },
+        });
       });
 
       // --- Endpoints. Drawn from the route geometry itself, so they always sit
       // exactly on the planned track.
-      const reference = routes.find((r) => r.route_id === selectedRouteId) ?? routes[0];
+      // Endpoints come from the ACTIVE track when there is one, so the origin
+      // marker follows the vessel's real starting point after a replan.
+      const activeTrack = tracks.find((t) => t.variant === 'active');
+      const hasActiveTrack = Boolean(monitoringUnderway);
+      const reference = (activeTrack ?? tracks[0])?.route;
       if (reference && reference.coordinates.length > 1) {
         const origin = reference.coordinates[0];
         const destination = reference.coordinates[reference.coordinates.length - 1];
@@ -195,11 +236,15 @@ export const MissionRouteLayer = ({
           });
         };
 
-        endpoint(origin, originName, '#5ce1a6', true);
+        // The origin marker is only meaningful while planning. Once the vessel
+        // is under way it sits on top of the ship, captioned "Current
+        // position" -- which the vessel marker already says, in a label that
+        // also carries her name and speed. Two boxes, one fact.
+        if (!hasActiveTrack) endpoint(origin, originName, '#5ce1a6', true);
         endpoint(destination, destinationName, '#ffb300', false);
       }
     },
-    [viewer, routes, selectedRouteId, originName, destinationName, focusSelectedOnly],
+    [viewer, tracks, selectedRouteId, originName, destinationName, monitoringUnderway],
   );
 
   // Picking an alternate selects it. Registered once for the layer's lifetime.
@@ -210,7 +255,10 @@ export const MissionRouteLayer = ({
       const picked = viewer.scene.pick(movement.position);
       const id = picked?.id?.id;
       if (typeof id === 'string' && (id.startsWith('route:') || id.startsWith('route-label:'))) {
-        const routeId = id.split(':')[1] as RouteId;
+        // "route:<track key>:<route id>" -- the track key disambiguates the
+        // case where the active route and a proposal share a route_id, which
+        // would otherwise be a duplicate Cesium entity id.
+        const routeId = id.slice(id.lastIndexOf(':') + 1) as RouteId;
         selectHandlerRef.current?.(routeId);
       }
     }, ScreenSpaceEventType.LEFT_CLICK);
@@ -239,6 +287,7 @@ export default MissionRouteLayer;
 
 /** Re-exported so panels and the legend cannot drift from the map's colors. */
 export const ROUTE_COLORS = {
-  selected: SELECTED_COLOR,
-  alternate: ALTERNATE_COLOR,
+  selected: TRACK_STYLES.active.color,
+  alternate: TRACK_STYLES.candidate.color,
+  proposal: TRACK_STYLES.proposal.color,
 };

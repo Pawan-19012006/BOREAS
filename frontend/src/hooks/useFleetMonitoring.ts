@@ -27,7 +27,7 @@ import {
   type RouteUpdateCreate,
   type VesselState,
 } from '../services/coordinationApi';
-import type { MissionId, RoutePlan } from '../services/missionApi';
+import type { MissionId, RouteId, RoutePlan } from '../services/missionApi';
 
 export type MonitoringStage =
   | 'idle'
@@ -54,7 +54,7 @@ export interface UseFleetMonitoringReturn {
   beginNavigation: (missionId: MissionId, vesselId: string, route: RoutePlan) => Promise<void>;
   simulateChange: () => Promise<void>;
   discardPreview: () => void;
-  sendUpdate: () => Promise<void>;
+  sendUpdate: (routeId?: RouteId) => Promise<void>;
   acknowledgeResolution: () => void;
   endNavigation: () => void;
   setSpeed: (multiplier: number) => Promise<void>;
@@ -192,13 +192,20 @@ export function useFleetMonitoring(): UseFleetMonitoringReturn {
     setStage('monitoring');
   }, []);
 
-  const sendUpdate = useCallback(async () => {
+  const sendUpdate = useCallback(async (routeId?: RouteId) => {
     if (!preview) return;
     setIsBusy(true);
     setError(null);
     setStage('sending');
     try {
-      const created = await sendRouteUpdate(preview);
+      // Send the candidate the operator actually chose. Without this the panel
+      // could highlight one proposal while a different one went to the Ship --
+      // the card and the wire disagreeing about what was proposed.
+      const chosen = routeId
+        ? preview.proposed_candidates.find((r) => r.route_id === routeId)
+        : undefined;
+      const payload = chosen ? { ...preview, new_route: chosen } : preview;
+      const created = await sendRouteUpdate(payload);
       setSentUpdate(created);
       setPreview(null);
       setStage('pending');

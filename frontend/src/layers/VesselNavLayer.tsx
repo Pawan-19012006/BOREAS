@@ -11,6 +11,7 @@ import {
   Cartesian3,
   Color,
   CustomDataSource,
+  HorizontalOrigin,
   LabelStyle,
   Math as CesiumMath,
   Matrix3,
@@ -32,6 +33,10 @@ interface VesselNavLayerProps {
   position: LonLat;
   headingDeg: number | null;
   vesselName: string;
+  /** Speed made good, shown on the single compact label beside the ship. */
+  speedKt?: number;
+  /** False while movement is frozen for a route decision. */
+  isUnderWay?: boolean;
   /** Route vertices already passed, for the covered-track trail. */
   coveredPath: LonLat[];
   nextWaypoint: LonLat | null;
@@ -92,6 +97,8 @@ export const VesselNavLayer = ({
   position,
   headingDeg,
   vesselName,
+  speedKt,
+  isUnderWay = true,
   coveredPath,
   nextWaypoint,
   // Distinct name lets a second, independent vessel marker (e.g. the fleet-
@@ -99,6 +106,15 @@ export const VesselNavLayer = ({
   // layer's usual client-simulated one, rather than sharing one data source.
   dataSourceName = 'vessel-navigation',
 }: VesselNavLayerProps) => {
+  // LIVE / HOLDING plus speed, so one label answers "which ship, and is it
+  // moving" without a second annotation next to it.
+  const statusText =
+    !isUnderWay
+      ? 'HOLDING'
+      : speedKt !== undefined
+        ? `LIVE · ${speedKt.toFixed(1)} kt`
+        : 'LIVE';
+
   const sourceRef = useRef<CustomDataSource | null>(null);
   const icon = useMemo(() => makeVesselIcon(), []);
 
@@ -161,19 +177,27 @@ export const VesselNavLayer = ({
         alignedAxis:
           headingDeg !== null ? bearingToWorldDirection(vesselPos, headingDeg) : Cartesian3.ZERO,
       },
+      // ONE compact label. Name plus status on a single line: the marker
+      // itself already says "this is where the ship is", so a second caption
+      // repeating that was pure clutter. Offset up and to the right, clear of
+      // the hull icon and of the course line running through it.
       label: {
-        text: vesselName,
+        text: `${vesselName} · ${statusText}`,
         font: '600 12px Barlow, sans-serif',
         fillColor: Color.WHITE,
         showBackground: true,
         backgroundColor: Color.fromCssColorString('#04090f').withAlpha(0.85),
         backgroundPadding: new Cartesian2(8, 4),
         style: LabelStyle.FILL,
-        verticalOrigin: VerticalOrigin.TOP,
-        pixelOffset: new Cartesian2(0, 26),
+        horizontalOrigin: HorizontalOrigin.LEFT,
+        verticalOrigin: VerticalOrigin.BOTTOM,
+        pixelOffset: new Cartesian2(18, -18),
+        // Keeps the label on top of route lines and hazard markers rather than
+        // being occluded by them.
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
     });
-  }, [position, headingDeg, vesselName, coveredPath, nextWaypoint, icon]);
+  }, [position, headingDeg, vesselName, statusText, coveredPath, nextWaypoint, icon]);
 
   return null;
 };
